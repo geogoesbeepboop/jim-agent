@@ -89,7 +89,7 @@ def system_graph(settings: Settings | None = None) -> SystemGraph:
     # --- Buyers ---
     g.add(Node("mcp_agent", "MCP agents<br/>(Claude, IDEs)", "buyers", "buyer"))
     g.add(Node("http_agent", "HTTP / agent buyers<br/>(x402 clients)", "buyers", "buyer"))
-    g.add(Node("human", "Human UI<br/>(pays under the hood)", "buyers", "buyer"))
+    g.add(Node("human", "Human UI<br/>(free Preview · wallet paywall)", "buyers", "buyer"))
 
     # --- Discovery ---
     g.add(Node("catalog", "GET /catalog", "discovery", "discovery"))
@@ -146,6 +146,8 @@ def system_graph(settings: Settings | None = None) -> SystemGraph:
     g.add(Node("store", f"Store<br/>{backend}", "store", "store"))
     g.add(Node("cache", "cache (data_purchases)<br/>buy once · resell many", "store", "store"))
     g.add(Node("ledger", "margin ledger<br/>(query_records)", "store", "store"))
+    g.add(Node("receipts", "audit log<br/>(payment_receipts)", "store", "store"))
+    g.add(Node("admin", "GET /admin<br/>(revenue · buyers · tx)", "seller", "seller"))
 
     # --- Monitors ---
     sched = "scheduler (in-seller)" if s.monitor_autostart else "scheduler (jim-monitor serve)"
@@ -204,8 +206,13 @@ def system_graph(settings: Settings | None = None) -> SystemGraph:
     # Store wiring.
     g.link("store", "cache")
     g.link("store", "ledger")
+    g.link("store", "receipts")
     g.link("gather", "store", "record")
     g.link("judge", "ledger", "margin")
+    # Settlement audit: the payment middleware records a receipt per paid call,
+    # which the admin dashboard reads back (revenue · buyers · on-chain tx).
+    g.link("mw", "receipts", "settle → audit")
+    g.link("receipts", "admin", "read")
 
     # Monitors reuse the engine.
     g.link("monitor_sched", "triggers", "diff → crew")

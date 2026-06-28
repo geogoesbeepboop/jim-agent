@@ -1,9 +1,14 @@
 """SQLAlchemy ORM models for the cache + repackage + margin ledger.
 
-Three tables:
-  - data_purchases : every x402 datum we bought (the cache; buy once, reuse).
-  - query_records  : per research query, the full cost_in / price_out / margin.
-  - insights       : derived insights with a pgvector embedding (semantic reuse).
+Tables:
+  - data_purchases   : every x402 datum we bought (the cache; buy once, reuse).
+  - query_records    : per research query, the full cost_in / price_out / margin.
+  - insights         : derived insights with a pgvector embedding (semantic reuse).
+  - payment_receipts : the on-chain settlement audit log — one row per x402
+                       payment that settled at our paywall (buyer address + tx
+                       hash + amount). Distinct from query_records: this is the
+                       *revenue/settlement* side (who paid us, on which tx),
+                       whereas query_records is the *economics* side (margin).
 """
 
 from __future__ import annotations
@@ -71,6 +76,34 @@ class Insight(Base):
     text: Mapped[str] = mapped_column(Text)
     embedding: Mapped[list[float]] = mapped_column(Vector(EMBED_DIM))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class PaymentReceipt(Base):
+    """One settled x402 payment at our paywall — the on-chain audit trail.
+
+    Populated by :class:`jim.seller.audit.PaymentAuditMiddleware` from the
+    ``PAYMENT-RESPONSE`` settlement header, so it records what *actually settled*
+    (payer, tx hash, amount) rather than what we intended to charge. Append-only:
+    an audit log is never mutated."""
+
+    __tablename__ = "payment_receipts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tx_hash: Mapped[str | None] = mapped_column(String(128), index=True)  # settlement tx
+    payer: Mapped[str | None] = mapped_column(String(64), index=True)  # buyer address
+    pay_to: Mapped[str | None] = mapped_column(String(64), nullable=True)  # our address
+    amount_usdc: Mapped[float] = mapped_column(Float, default=0.0)  # settled USDC
+    network: Mapped[str] = mapped_column(String(32))  # CAIP-2
+    path: Mapped[str] = mapped_column(String(128), index=True)  # request path
+    product: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    identifier: Mapped[str | None] = mapped_column(String(64), nullable=True)  # ticker/token
+    mode: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    status_code: Mapped[int] = mapped_column(Integer, default=200)
+    success: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    receipt: Mapped[dict] = mapped_column(JSON)  # the raw decoded settle response
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, index=True
+    )
 
 
 class MonitorRow(Base):

@@ -18,8 +18,15 @@ what may ship — the UI is just another caller of ``run_research``.
 
 from __future__ import annotations
 
+from html import escape
+
 from jim.config import Settings, get_settings
 from jim.marketplace.catalog import build_catalog, listing_for
+
+
+def _attr(value: str) -> str:
+    """Escape a string for safe use inside a double-quoted HTML attribute."""
+    return escape(value, quote=True)
 
 
 async def checkout(
@@ -86,16 +93,16 @@ def storefront_html(settings: Settings | None = None) -> str:
     listings = build_catalog()
     options = "\n".join(
         f'<option value="{listing.product}" data-param="{listing.identifier_param}" '
-        f'data-example="{listing.identifier_example}">{listing.title} — '
+        f'data-example="{listing.identifier_example}" data-path="{listing.path}" '
+        f'data-price="{listing.price_usd:.2f}" data-title="{listing.title}" '
+        f'data-paid="{"1" if listing.paid_upstream else "0"}" '
+        f'data-upstream="{listing.upstream}" '
+        f'data-desc="{_attr(listing.description)}">{listing.title} — '
         f"${listing.price_usd:.2f}</option>"
         for listing in listings
     )
     net = "Base mainnet" if s.is_mainnet else "Base Sepolia (testnet)"
-    settle_note = (
-        "Settling real x402 payments (jim pays its own endpoint)."
-        if s.ui_settle_via_x402
-        else "Preview mode — set UI_SETTLE_VIA_X402=true (with a funded wallet) to settle for real."
-    )
+    wallet_kind = "real USDC" if s.is_mainnet else "testnet USDC"
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -103,28 +110,37 @@ def storefront_html(settings: Settings | None = None) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>{s.service_name} — cited financial research</title>
 <style>
-  :root {{ color-scheme: dark; }}
-  body {{ font-family: -apple-system, system-ui, sans-serif; margin: 0; background:#0f1419; color:#e6e6e6; }}
-  header {{ padding: 22px 28px; border-bottom:1px solid #233; }}
-  header h1 {{ margin:0; font-size:22px; }}
-  header p {{ margin:6px 0 0; color:#9bb; font-size:13px; }}
+  :root {{ color-scheme: dark; --bg:#0f1419; --panel:#1b2733; --line:#2c3e50; --muted:#9bb;
+           --accent:#1e88e5; --accent2:#22a06b; --ink:#e6e6e6; }}
+  * {{ box-sizing:border-box; }}
+  body {{ font-family:-apple-system,system-ui,sans-serif; margin:0; background:var(--bg); color:var(--ink); }}
+  header {{ padding:22px 28px; border-bottom:1px solid #233; }}
+  header h1 {{ margin:0; font-size:22px; letter-spacing:.2px; }}
+  header p {{ margin:6px 0 0; color:var(--muted); font-size:13px; max-width:680px; }}
+  nav {{ margin-top:12px; }}
   nav a {{ color:#7fd; text-decoration:none; margin-right:14px; font-size:13px; }}
-  .wrap {{ max-width: 860px; margin: 0 auto; padding: 24px 28px; }}
-  .card {{ background:#1b2733; border:1px solid #2c3e50; border-radius:12px; padding:18px; margin-bottom:18px; }}
-  label {{ display:block; font-size:12px; color:#9bb; margin:10px 0 4px; }}
-  select, input {{ width:100%; padding:10px; border-radius:8px; border:1px solid #2c3e50;
-                   background:#0f1419; color:#e6e6e6; font-size:14px; box-sizing:border-box; }}
-  button {{ margin-top:16px; padding:11px 20px; border:0; border-radius:8px; background:#1e88e5;
-            color:#fff; font-size:15px; cursor:pointer; }}
+  .wrap {{ max-width:900px; margin:0 auto; padding:24px 28px; }}
+  .card {{ background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px; margin-bottom:18px; }}
+  label {{ display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; }}
+  select, input {{ width:100%; padding:10px; border-radius:8px; border:1px solid var(--line);
+                   background:var(--bg); color:var(--ink); font-size:14px; }}
+  .actions {{ display:flex; gap:12px; margin-top:18px; flex-wrap:wrap; }}
+  button {{ padding:11px 18px; border:0; border-radius:8px; font-size:14px; cursor:pointer; color:#fff; }}
+  button.primary {{ background:var(--accent); }}
+  button.wallet {{ background:var(--accent2); }}
+  button.ghost {{ background:transparent; border:1px solid var(--line); color:var(--ink); }}
   button:disabled {{ opacity:.5; cursor:wait; }}
   .row {{ display:flex; gap:14px; }} .row > div {{ flex:1; }}
+  .detail {{ background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:13px 15px; margin-top:14px; font-size:13px; color:#cde; }}
+  .detail .meta {{ color:var(--muted); margin-top:6px; font-size:12px; }}
   .memo {{ white-space:pre-wrap; line-height:1.55; }}
   .pill {{ display:inline-block; padding:2px 9px; border-radius:11px; font-size:12px; margin-right:6px; }}
   .ok {{ background:#1b3a2b; color:#7fe0a8; border:1px solid #2e7d52; }}
   .bad {{ background:#3a1f1f; color:#f3a; border:1px solid #7d2e2e; }}
-  .muted {{ color:#9bb; font-size:12px; }}
-  .cite {{ font-size:12px; color:#cde; border-top:1px dashed #2c3e50; padding-top:8px; margin-top:12px; }}
-  code {{ background:#0f1419; padding:1px 5px; border-radius:4px; }}
+  .tag {{ background:#10202b; color:#8cf; border:1px solid #1f3a4d; }}
+  .muted {{ color:var(--muted); font-size:12px; }}
+  .cite {{ font-size:12px; color:#cde; border-top:1px dashed var(--line); padding-top:8px; margin-top:12px; }}
+  code {{ background:var(--bg); padding:1px 5px; border-radius:4px; }}
 </style>
 </head>
 <body>
@@ -133,8 +149,8 @@ def storefront_html(settings: Settings | None = None) -> str:
   <p>{s.service_description}</p>
   <nav>
     <a href="/catalog">catalog</a><a href="/pricing">pricing</a>
-    <a href="/map">system map</a><a href="/dashboard">dashboard</a>
-    <a href="/.well-known/x402">discovery manifest</a>
+    <a href="/map">system map</a><a href="/dashboard">margin</a>
+    <a href="/admin">admin</a><a href="/.well-known/x402">discovery</a>
   </nav>
 </header>
 <div class="wrap">
@@ -154,37 +170,63 @@ def storefront_html(settings: Settings | None = None) -> str:
     </div>
     <label for="identifier">Identifier</label>
     <input id="identifier" placeholder="AAPL"/>
-    <button id="go">Get cited report</button>
-    <p class="muted" style="margin-top:12px">Network: {net}. {settle_note}</p>
+    <div id="detail" class="detail"></div>
+    <div class="actions">
+      <button id="preview" class="primary">Preview — free</button>
+      <button id="wallet" class="wallet">Pay with wallet</button>
+    </div>
+    <p class="muted" style="margin-top:14px">
+      Network <code>{net}</code>. <b>Preview</b> runs the same sourcing-gated engine and
+      renders the memo here, unpaid. <b>Pay with wallet</b> opens the x402 checkout — connect
+      MetaMask or Coinbase Wallet and settle in {wallet_kind} for the real, billed report.
+    </p>
   </div>
   <div id="out"></div>
 </div>
 <script>
 const productSel = document.getElementById('product');
 const idInput = document.getElementById('identifier');
-function syncPlaceholder() {{
-  const opt = productSel.selectedOptions[0];
-  idInput.placeholder = opt.dataset.example || 'AAPL';
-}}
-productSel.addEventListener('change', syncPlaceholder); syncPlaceholder();
+const modeSel = document.getElementById('mode');
+const detail = document.getElementById('detail');
 
-document.getElementById('go').addEventListener('click', async () => {{
-  const btn = document.getElementById('go');
+function opt() {{ return productSel.selectedOptions[0]; }}
+function currentId() {{ return (idInput.value || idInput.placeholder).trim(); }}
+
+function syncDetail() {{
+  const o = opt();
+  idInput.placeholder = o.dataset.example || 'AAPL';
+  const paid = o.dataset.paid === '1'
+    ? '<span class="pill tag">jim pays upstream</span>' : '';
+  detail.innerHTML = '<b>' + o.dataset.title + '</b> · <span class="muted">$' + o.dataset.price + '/report</span> ' + paid +
+    '<div style="margin-top:6px">' + o.dataset.desc + '</div>' +
+    '<div class="meta">Upstream: ' + o.dataset.upstream + '</div>';
+}}
+productSel.addEventListener('change', syncDetail); syncDetail();
+
+document.getElementById('preview').addEventListener('click', async () => {{
+  const btn = document.getElementById('preview');
   const out = document.getElementById('out');
-  const product = productSel.value;
-  const identifier = (idInput.value || idInput.placeholder).trim();
-  const mode = document.getElementById('mode').value;
-  btn.disabled = true; out.innerHTML = '<div class="card muted">Researching ' + identifier + ' …</div>';
+  const product = productSel.value, identifier = currentId(), mode = modeSel.value;
+  btn.disabled = true;
+  out.innerHTML = '<div class="card muted">Researching ' + identifier + ' …</div>';
   try {{
     const r = await fetch('/ui/checkout', {{
       method: 'POST', headers: {{'Content-Type':'application/json'}},
       body: JSON.stringify({{product, identifier, mode}})
     }});
-    const data = await r.json();
-    out.innerHTML = render(data);
+    out.innerHTML = render(await r.json());
   }} catch (e) {{
     out.innerHTML = '<div class="card"><span class="pill bad">error</span> ' + e + '</div>';
   }} finally {{ btn.disabled = false; }}
+}});
+
+document.getElementById('wallet').addEventListener('click', () => {{
+  const o = opt();
+  const url = o.dataset.path + '?' + encodeURIComponent(o.dataset.param) + '=' +
+    encodeURIComponent(currentId()) + '&mode=' + encodeURIComponent(modeSel.value);
+  // Navigating a browser to the paid route serves x402's wallet paywall, which
+  // connects MetaMask / Coinbase Wallet, signs EIP-3009, and settles on-chain.
+  window.open(url, '_blank', 'noopener');
 }});
 
 function render(data) {{
@@ -192,7 +234,7 @@ function render(data) {{
   const res = data.result || {{}};
   const src = res.sourcing || {{}};
   const cost = res.cost || {{}};
-  const paid = data.paid ? '<span class="pill ok">paid · x402</span>' : '<span class="pill ok">preview</span>';
+  const paid = data.paid ? '<span class="pill ok">paid · x402</span>' : '<span class="pill ok">preview · free</span>';
   const tx = data.tx_hash ? '<span class="muted">tx ' + data.tx_hash.slice(0,12) + '…</span>' : '';
   const cites = (res.citations||[]).slice(0,8).map(c =>
     '[' + c.id + '] ' + c.label + ' = ' + c.value + ' ' + (c.unit||'')).join(' · ');

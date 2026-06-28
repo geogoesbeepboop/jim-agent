@@ -61,13 +61,17 @@ src/jim/
     pricing.py          # published pricing tiers (deterministic)
     discovery.py        # the /.well-known/x402 manifest
     mcp_server.py       # jim as an x402-gated MCP server (jim-mcp)
-    ui.py               # thin human storefront that pays via x402 under the hood
+    ui.py               # human storefront: free Preview + real browser-wallet checkout
     sysmap.py           # live Mermaid system map (jim-map; GET /map)
     mainnet.py          # read-only mainnet-cutover readiness preflight
     cli.py              # jim-market: catalog / pricing / manifest / mainnet
-  store/                # Postgres+pgvector cache + margin ledger + monitors (memory fallback)
+  seller/
+    app.py              # FastAPI app + route wiring + x402 wallet paywall
+    audit.py            # settlement audit middleware → one receipt per paid call
+  store/                # Postgres+pgvector cache + margin ledger + monitors + receipts
   vendor/mock_graph.py  # testnet stand-in for The Graph (same JSON shape)
-  dashboard.py          # per-query margin + monitor-economics dashboard
+  dashboard.py          # per-query margin + monitor-economics dashboard (/dashboard)
+  admin.py              # settlement audit dashboard: revenue, buyers, on-chain tx (/admin)
   obs/tracing.py        # optional Langfuse trace (cost + factuality), no-op if unset
 scripts/
   ping_demo.py          # Phase 0: pay our own /ping, print the receipt
@@ -219,12 +223,16 @@ uv run jim-map --format html -o map.html   # self-contained page (mermaid.js)
 
 # Run a seller and browse it
 uv run jim-seller
-#   GET /            → the human storefront (pays via x402 under the hood)
+#   GET /            → the human storefront: free Preview + "Pay with wallet"
 #   GET /catalog     → machine-readable product list
 #   GET /pricing     → pricing tiers
+#   GET /admin       → settlement audit dashboard (revenue · buyers · on-chain tx)
+#   GET /admin/audit → the same audit trail as JSON
 #   GET /.well-known/x402  → the discovery manifest agents fetch
 #   GET /map         → the live system map in your browser
 #   a paid route's 402 now carries a Bazaar discovery extension → first settle auto-indexes us
+#   a *browser* hitting a paid route gets x402's wallet paywall (MetaMask / Coinbase Wallet);
+#     agents still get the machine-readable 402 — see ADR-0005
 
 # Expose jim as an MCP server (agents discover + pay our tools over MCP)
 uv sync --extra mcp && uv run jim-mcp     # stdio; --transport http for streamable-http
@@ -238,6 +246,32 @@ map — so prices and schemas never drift. The mainnet preflight is a dry-run th
 can't spend; the buy leg has been mainnet-capable since Phase 2 (`GRAPH_LIVE`). See
 **[docs/SYSTEM_MAP.md](docs/SYSTEM_MAP.md)**, [ADR-0003](docs/adr/0003-bazaar-discovery.md),
 and [ADR-0004](docs/adr/0004-mainnet-cutover-and-ui-self-pay.md).
+
+## Payments: audit log, admin dashboard & browser wallets
+
+Every x402 payment that settles at the paywall is recorded as an **on-chain audit
+receipt** — buyer address, settlement tx hash, settled USDC, and which query —
+captured by a thin middleware that decodes the settlement header *after* the
+handler returns (the only point where the tx hash exists). It's append-only and
+best-effort: a store outage is logged and swallowed, never blocking a paid
+delivery. This is deliberately separate from the margin ledger — settlement
+(*who paid us, on which tx*) vs. economics (*margin per query*).
+
+```bash
+uv run jim-admin                 # revenue · unique buyers · per-tx audit trail (CLI)
+#   GET /admin                   → the same, in the browser (Basescan links)
+#   GET /admin/audit             → JSON
+```
+
+A **human can now pay with their own wallet**: a browser that hits a paid route is
+served x402's bundled paywall (MetaMask / Coinbase Wallet / WalletConnect → real
+EIP-3009 settlement). The storefront keeps a free **Preview** and adds a **Pay
+with wallet** action; **agents still get the machine-readable 402** (the paywall
+is gated on a browser `Accept` + UA), so nothing about the agent path changes. No
+new config or hand-rolled crypto. See
+[ADR-0005](docs/adr/0005-settlement-audit-and-browser-wallet.md).
+> New table: run `uv run jim-initdb` once to create `payment_receipts` before the
+> admin view populates (no-op if it already exists).
 
 ## Tests
 
@@ -255,7 +289,14 @@ uv run pytest          # all offline, no wallet/network/API key/DB:
                        #  · marketplace: catalog + Bazaar extension shape, pricing
                        #    tiers, discovery manifest, MCP tool surface, mainnet
                        #    readiness, live system-map generator, discovery/UI endpoints
+                       #  · payments: settlement receipt decode, audit middleware
+                       #    (records buyer + tx, fails open), admin revenue/buyer
+                       #    rollup, wallet paywall served to browsers not agents
 ```
+
+> Tests are hermetic by design (a `conftest.py` neutralises `DATABASE_URL` /
+> `ANTHROPIC_API_KEY` from your `.env`), so `uv run pytest` uses the in-memory
+> store and no API key regardless of local config.
 
 ## Key x402 V2 facts (so you don't relearn them)
 
