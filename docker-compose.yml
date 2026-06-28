@@ -1,0 +1,25 @@
+# Local Postgres + pgvector for jim's cache / repackage / margin ledger (Phase 2).
+# Migrate to Supabase later by pointing DATABASE_URL at the Supabase Postgres.
+#
+#   docker compose up -d
+#   DATABASE_URL=postgresql+asyncpg://jim:jim@localhost:5432/jim
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: jim-postgres
+    environment:
+      POSTGRES_USER: jim
+      POSTGRES_PASSWORD: jim
+      POSTGRES_DB: jim
+    ports:
+      - "5432:5432"
+    volumes:
+      - jim_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jim -d jim"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  jim_pgdata:

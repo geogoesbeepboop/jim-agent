@@ -1,0 +1,28 @@
+# Secrets — never commit a funded key
+.env
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.uv/
+*.egg-info/
+dist/
+build/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# OS
+.DS_Store
+*.webloc
+
+# Local tooling / editor
+.claude/settings.local.json
+
+# Generated artifacts (regenerate with `uv run jim-map --format html -o map.html`)
+map.html

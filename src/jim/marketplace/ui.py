@@ -1,0 +1,212 @@
+"""The thin human UI (Phase 5) — a storefront that pays via x402 under the hood.
+
+Two halves:
+
+  - :func:`storefront_html` — a dependency-free page (vanilla fetch, no build
+    step) where a person picks a product + identifier and gets a cited memo back.
+  - :func:`checkout` — the backend the page calls. When a wallet is funded and
+    ``UI_SETTLE_VIA_X402`` is on (or ``settle=true`` is forced), it proves the rail
+    end-to-end by having jim **buy its own endpoint** over x402 — so the visitor
+    needs no wallet and a real on-chain settlement still happens. Otherwise it
+    runs the engine directly and labels the result a *preview*.
+
+The self-pay is the honest "pays under the hood" demo: production would swap jim's
+own wallet for a browser wallet (an x402 browser extension / WalletConnect), but
+the settlement path is identical. Either way the **same** sourcing gate decides
+what may ship — the UI is just another caller of ``run_research``.
+"""
+
+from __future__ import annotations
+
+from jim.config import Settings, get_settings
+from jim.marketplace.catalog import build_catalog, listing_for
+
+
+async def checkout(
+    *,
+    product: str,
+    identifier: str,
+    mode: str = "human",
+    settle: bool | None = None,
+) -> dict:
+    """Fulfil one research request for the UI; settle over x402 when funded."""
+    settings = get_settings()
+    listing = listing_for(product)
+    if listing is None:
+        return {"ok": False, "error": f"Unknown product {product!r}."}
+
+    want_settle = settings.ui_settle_via_x402 if settle is None else settle
+    can_settle = bool(settings.evm_private_key) and want_settle
+
+    if can_settle:
+        return await _checkout_via_x402(settings, listing.path, identifier, mode)
+    return await _checkout_direct(product, identifier, mode, listing.price_usd)
+
+
+async def _checkout_direct(product: str, identifier: str, mode: str, price_usd: float) -> dict:
+    """Run the engine in-process — always works, no wallet/network needed."""
+    from jim.research.engine import run_research
+    from jim.research.schemas import ResearchResponse
+
+    result = await run_research(identifier, product=product, mode=mode)
+    if result.status == "error":
+        return {"ok": False, "error": result.error, "settled_via": "direct"}
+    return {
+        "ok": True,
+        "paid": False,
+        "settled_via": "direct",
+        "tx_hash": None,
+        "price_usd": price_usd,
+        "result": ResearchResponse.from_result(result).model_dump(),
+    }
+
+
+async def _checkout_via_x402(settings: Settings, path: str, identifier: str, mode: str) -> dict:
+    """Pay our own endpoint over x402 — proves settlement without a visitor wallet."""
+    from jim.buyer import pay
+    from jim.research.products import get_product
+
+    param = "ticker" if path.endswith("fundamentals") else "token"
+    url = f"{settings.public_url}{path}?{param}={identifier}&mode={mode}"
+    resp = await pay(url, method="GET")
+    if resp.status_code != 200:
+        return {"ok": False, "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+    return {
+        "ok": True,
+        "paid": resp.paid,
+        "settled_via": "x402",
+        "tx_hash": resp.tx_hash,
+        "price_usd": resp.cost_in_usd or get_product(path.rsplit("/", 1)[-1]).price_out_usd,
+        "result": resp.json(),
+    }
+
+
+def storefront_html(settings: Settings | None = None) -> str:
+    s = settings or get_settings()
+    listings = build_catalog()
+    options = "\n".join(
+        f'<option value="{listing.product}" data-param="{listing.identifier_param}" '
+        f'data-example="{listing.identifier_example}">{listing.title} — '
+        f"${listing.price_usd:.2f}</option>"
+        for listing in listings
+    )
+    net = "Base mainnet" if s.is_mainnet else "Base Sepolia (testnet)"
+    settle_note = (
+        "Settling real x402 payments (jim pays its own endpoint)."
+        if s.ui_settle_via_x402
+        else "Preview mode — set UI_SETTLE_VIA_X402=true (with a funded wallet) to settle for real."
+    )
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>{s.service_name} — cited financial research</title>
+<style>
+  :root {{ color-scheme: dark; }}
+  body {{ font-family: -apple-system, system-ui, sans-serif; margin: 0; background:#0f1419; color:#e6e6e6; }}
+  header {{ padding: 22px 28px; border-bottom:1px solid #233; }}
+  header h1 {{ margin:0; font-size:22px; }}
+  header p {{ margin:6px 0 0; color:#9bb; font-size:13px; }}
+  nav a {{ color:#7fd; text-decoration:none; margin-right:14px; font-size:13px; }}
+  .wrap {{ max-width: 860px; margin: 0 auto; padding: 24px 28px; }}
+  .card {{ background:#1b2733; border:1px solid #2c3e50; border-radius:12px; padding:18px; margin-bottom:18px; }}
+  label {{ display:block; font-size:12px; color:#9bb; margin:10px 0 4px; }}
+  select, input {{ width:100%; padding:10px; border-radius:8px; border:1px solid #2c3e50;
+                   background:#0f1419; color:#e6e6e6; font-size:14px; box-sizing:border-box; }}
+  button {{ margin-top:16px; padding:11px 20px; border:0; border-radius:8px; background:#1e88e5;
+            color:#fff; font-size:15px; cursor:pointer; }}
+  button:disabled {{ opacity:.5; cursor:wait; }}
+  .row {{ display:flex; gap:14px; }} .row > div {{ flex:1; }}
+  .memo {{ white-space:pre-wrap; line-height:1.55; }}
+  .pill {{ display:inline-block; padding:2px 9px; border-radius:11px; font-size:12px; margin-right:6px; }}
+  .ok {{ background:#1b3a2b; color:#7fe0a8; border:1px solid #2e7d52; }}
+  .bad {{ background:#3a1f1f; color:#f3a; border:1px solid #7d2e2e; }}
+  .muted {{ color:#9bb; font-size:12px; }}
+  .cite {{ font-size:12px; color:#cde; border-top:1px dashed #2c3e50; padding-top:8px; margin-top:12px; }}
+  code {{ background:#0f1419; padding:1px 5px; border-radius:4px; }}
+</style>
+</head>
+<body>
+<header>
+  <h1>{s.service_name} — cited financial research</h1>
+  <p>{s.service_description}</p>
+  <nav>
+    <a href="/catalog">catalog</a><a href="/pricing">pricing</a>
+    <a href="/map">system map</a><a href="/dashboard">dashboard</a>
+    <a href="/.well-known/x402">discovery manifest</a>
+  </nav>
+</header>
+<div class="wrap">
+  <div class="card">
+    <div class="row">
+      <div>
+        <label for="product">Product</label>
+        <select id="product">{options}</select>
+      </div>
+      <div>
+        <label for="mode">Mode</label>
+        <select id="mode">
+          <option value="human">human — narrative</option>
+          <option value="agent">agent — terse, metric-dense</option>
+        </select>
+      </div>
+    </div>
+    <label for="identifier">Identifier</label>
+    <input id="identifier" placeholder="AAPL"/>
+    <button id="go">Get cited report</button>
+    <p class="muted" style="margin-top:12px">Network: {net}. {settle_note}</p>
+  </div>
+  <div id="out"></div>
+</div>
+<script>
+const productSel = document.getElementById('product');
+const idInput = document.getElementById('identifier');
+function syncPlaceholder() {{
+  const opt = productSel.selectedOptions[0];
+  idInput.placeholder = opt.dataset.example || 'AAPL';
+}}
+productSel.addEventListener('change', syncPlaceholder); syncPlaceholder();
+
+document.getElementById('go').addEventListener('click', async () => {{
+  const btn = document.getElementById('go');
+  const out = document.getElementById('out');
+  const product = productSel.value;
+  const identifier = (idInput.value || idInput.placeholder).trim();
+  const mode = document.getElementById('mode').value;
+  btn.disabled = true; out.innerHTML = '<div class="card muted">Researching ' + identifier + ' …</div>';
+  try {{
+    const r = await fetch('/ui/checkout', {{
+      method: 'POST', headers: {{'Content-Type':'application/json'}},
+      body: JSON.stringify({{product, identifier, mode}})
+    }});
+    const data = await r.json();
+    out.innerHTML = render(data);
+  }} catch (e) {{
+    out.innerHTML = '<div class="card"><span class="pill bad">error</span> ' + e + '</div>';
+  }} finally {{ btn.disabled = false; }}
+}});
+
+function render(data) {{
+  if (!data.ok) return '<div class="card"><span class="pill bad">rejected</span> ' + (data.error||'failed') + '</div>';
+  const res = data.result || {{}};
+  const src = res.sourcing || {{}};
+  const cost = res.cost || {{}};
+  const paid = data.paid ? '<span class="pill ok">paid · x402</span>' : '<span class="pill ok">preview</span>';
+  const tx = data.tx_hash ? '<span class="muted">tx ' + data.tx_hash.slice(0,12) + '…</span>' : '';
+  const cites = (res.citations||[]).slice(0,8).map(c =>
+    '[' + c.id + '] ' + c.label + ' = ' + c.value + ' ' + (c.unit||'')).join(' · ');
+  return '<div class="card">' +
+    '<div>' + paid + ' <b>' + (res.company || res.ticker || '') + '</b> ' +
+      '<span class="muted">status ' + (res.status||'') + '</span> ' + tx + '</div>' +
+    '<div class="memo" style="margin-top:12px">' + (res.memo || '(no memo)') + '</div>' +
+    '<div class="cite">Sourcing: ' + (src.passed ? 'PASS' : 'FAIL') + ' — ' +
+      (src.figures_covered||0) + '/' + (src.figures_checked||0) + ' figures · ' +
+      'price $' + (cost.price_out_usd||0) + ' · margin $' + (cost.margin_usd||0) + '</div>' +
+    '<div class="cite">' + cites + '</div>' +
+    '<div class="cite muted">' + (res.disclaimer || '') + '</div>' +
+  '</div>';
+}}
+</script>
+</body>
+</html>"""

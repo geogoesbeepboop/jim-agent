@@ -1,0 +1,76 @@
+[project]
+name = "jim-agent"
+version = "0.1.0"
+description = "An impersonal, fully-cited financial research service that sells over x402 and pays for its own data over x402."
+readme = "README.md"
+authors = [{ name = "geoandr-01", email = "georgeandrade93@gmail.com" }]
+requires-python = ">=3.12,<3.14"
+
+# Phase 0 payment layer + Phase 1 research engine.
+# Later phases add sqlalchemy/pgvector (Phase 2), etc. (see docs/BUILD_PLAN.md).
+dependencies = [
+    "x402[fastapi,httpx,evm]==2.12.*",
+    "fastapi[standard]>=0.115.0",
+    "httpx>=0.28.1",
+    "eth-account>=0.13.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "uvicorn>=0.30.0",
+    # Phase 1 — research engine
+    "langgraph>=0.2.0",
+    "anthropic>=0.40.0",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.29",
+    "pgvector>=0.3",
+    "numpy>=1.26",
+    "greenlet>=3.0",
+    # Phase 5 — Bazaar discovery extension validation (what x402[extensions] needs).
+    "jsonschema>=4.26.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.6.0",
+]
+# Optional factuality observability. The deterministic sourcing gate (jim.research.gate)
+# is always-on and needs none of this; these add LLM-judge scoring + tracing.
+eval = [
+    "langfuse>=2.50.0",
+]
+# Phase 5 — run jim as an MCP server (jim-mcp). The catalog/discovery surface and
+# tests work without this; only the live MCP server process needs it.
+mcp = [
+    "mcp>=1.0",
+]
+
+[project.scripts]
+jim-seller = "jim.seller.app:run"
+jim-wallet = "jim.wallet.cli:main"
+jim-research = "jim.research.cli:main"
+jim-dashboard = "jim.dashboard:main"
+jim-initdb = "jim.store.cli:main"
+jim-eval = "jim.eval.cli:main"
+jim-monitor = "jim.monitors.cli:main"
+# Phase 5 — marketplace, discovery, system map, MCP server.
+jim-market = "jim.marketplace.cli:main"
+jim-map = "jim.marketplace.sysmap:main"
+jim-mcp = "jim.marketplace.mcp_server:main"
+
+[build-system]
+requires = ["uv_build>=0.9.2,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "jim"
+module-root = "src"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
