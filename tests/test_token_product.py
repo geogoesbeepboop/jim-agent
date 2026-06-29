@@ -31,7 +31,8 @@ def _reset():
 
 
 async def _fake_buy(
-    url, *, method="GET", json_body=None, headers=None, private_key=None, timeout=180.0
+    url, *, method="GET", json_body=None, headers=None, private_key=None, timeout=180.0,
+    max_price_usd=None,
 ):
     payload = build_mock_response((json_body or {}).get("query", ""))
     return PaidResponse(

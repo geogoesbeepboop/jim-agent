@@ -19,7 +19,8 @@ from jim.vendor import build_mock_response
 
 def _fake_buy(counter: dict):
     async def buy(
-        url, *, method="GET", json_body=None, headers=None, private_key=None, timeout=180.0
+        url, *, method="GET", json_body=None, headers=None, private_key=None, timeout=180.0,
+        max_price_usd=None,
     ):
         counter["n"] += 1
         payload = build_mock_response((json_body or {}).get("query", ""))
@@ -68,6 +69,6 @@ async def test_graph_facts_are_cited_to_the_subgraph():
     source = GraphSource(buy_fn=_fake_buy({"n": 0}))
     result = await source.gather("UNI", budget=BudgetCap(0.10), store=MemoryStore())
     for f in result.snapshot.facts:
-        assert f.source_label == "The Graph · Uniswap v3"
+        assert f.source_label.startswith("The Graph · Uniswap v3")  # chain-qualified
         assert f.accession  # subgraph id is the citation anchor
         assert f.source_url

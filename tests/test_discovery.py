@@ -46,13 +46,13 @@ def test_catalog_endpoint_lists_products() -> None:
     assert resp.status_code == 200
     body = resp.json()
     products = {p["product"] for p in body["products"]}
-    assert products == {"fundamentals", "token"}
+    assert products == {"fundamentals", "token", "macro"}
     assert all("resource" in p and "price_usd" in p for p in body["products"])
 
 
 def test_pricing_endpoint_publishes_tiers() -> None:
     body = _client().get("/pricing").json()
-    assert set(body["pricing"]) == {"fundamentals", "token"}
+    assert set(body["pricing"]) == {"fundamentals", "token", "macro"}
     names = {t["name"] for t in body["pricing"]["fundamentals"]}
     assert names == {"oneshot", "agent", "bundle", "monitor"}
 
@@ -61,7 +61,7 @@ def test_well_known_manifest() -> None:
     body = _client().get("/.well-known/x402").json()
     assert body["x402Version"] == 2
     assert body["asset"]["symbol"] == "USDC"
-    assert {r["product"] for r in body["resources"]} == {"fundamentals", "token"}
+    assert {r["product"] for r in body["resources"]} == {"fundamentals", "token", "macro"}
     # Resource URLs reflect the request host when no public_base_url is set.
     assert all(r["resource"].startswith("http") for r in body["resources"])
 

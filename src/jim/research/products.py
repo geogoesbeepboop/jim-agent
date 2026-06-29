@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from jim.config import get_settings
-from jim.sources import FundamentalsSource, GraphSource, Source
+from jim.sources import FundamentalsSource, GraphSource, MacroSource, Source
 
 
 def usd(price: str) -> float:
@@ -41,7 +41,13 @@ def get_products() -> dict[str, Product]:
             name="token",
             source=GraphSource(),
             price_out_usd=usd(s.token_research_price),
-            identifier_label="token symbol or 0x address (e.g. WETH)",
+            identifier_label="token symbol or 0x address, optional :chain (e.g. WETH, AERO:base)",
+        ),
+        "macro": Product(
+            name="macro",
+            source=MacroSource(),
+            price_out_usd=usd(s.macro_research_price),
+            identifier_label="region (US) — cited Fed funds / CPI / Treasury context",
         ),
     }
 

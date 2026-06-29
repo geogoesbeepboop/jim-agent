@@ -105,6 +105,16 @@ class Settings(BaseSettings):
     per_query_budget_usd: float = 0.10  # hard ceiling on DATA spend per query
     purchase_cache_ttl_seconds: int = 86_400  # re-buy a datum at most once/day
 
+    # --- Data sources: macro context (free, public-domain) -----------------
+    # A free macro Source citing US-government primary sources (public domain,
+    # redistributable): Fed funds (NY Fed EFFR), CPI (BLS), Treasury yields
+    # (U.S. Treasury). Deliberately NOT FRED — FRED's API ToS forbids caching /
+    # redistribution, while the underlying agency data is public domain. See ADR-0007.
+    macro_research_price: str = "$0.15"  # price_out for a cited macro snapshot
+    # BLS API v2 key (free) lifts the daily request limit; v1 (keyless) is the
+    # fallback. Unset → keyless v1.
+    bls_api_key: str | None = None
+
     # --- Phase 4: continuous monitors (the "motley crew") ------------------
     # A monitor re-runs research on a schedule, diffs against its last baseline,
     # and only pays to write — and only pushes — when a deterministic rule fires.

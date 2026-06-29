@@ -46,7 +46,9 @@ async def checkout(
     can_settle = bool(settings.evm_private_key) and want_settle
 
     if can_settle:
-        return await _checkout_via_x402(settings, listing.path, identifier, mode)
+        return await _checkout_via_x402(
+            settings, listing.path, listing.identifier_param, identifier, mode
+        )
     return await _checkout_direct(product, identifier, mode, listing.price_usd)
 
 
@@ -68,12 +70,13 @@ async def _checkout_direct(product: str, identifier: str, mode: str, price_usd: 
     }
 
 
-async def _checkout_via_x402(settings: Settings, path: str, identifier: str, mode: str) -> dict:
+async def _checkout_via_x402(
+    settings: Settings, path: str, param: str, identifier: str, mode: str
+) -> dict:
     """Pay our own endpoint over x402 — proves settlement without a visitor wallet."""
     from jim.buyer import pay
     from jim.research.products import get_product
 
-    param = "ticker" if path.endswith("fundamentals") else "token"
     url = f"{settings.public_url}{path}?{param}={identifier}&mode={mode}"
     resp = await pay(url, method="GET")
     if resp.status_code != 200:

@@ -21,7 +21,7 @@ from jim.marketplace.mcp_server import mcp_tool_catalog, mcp_tool_name
 
 def test_catalog_lists_both_products() -> None:
     products = {listing.product for listing in build_catalog()}
-    assert products == {"fundamentals", "token"}
+    assert products == {"fundamentals", "token", "macro"}
 
 
 def test_listing_carries_call_shape_and_source() -> None:
@@ -81,10 +81,10 @@ def test_discovery_manifest_is_self_describing() -> None:
     m = discovery_manifest("https://jim.example")
     assert m["x402Version"] == 2
     assert m["asset"]["symbol"] == "USDC" and m["asset"]["decimals"] == 6
-    assert {r["product"] for r in m["resources"]} == {"fundamentals", "token"}
+    assert {r["product"] for r in m["resources"]} == {"fundamentals", "token", "macro"}
     # Resource URLs are absolute against the advertised base.
     assert all(r["resource"].startswith("https://jim.example/") for r in m["resources"])
-    assert m["mcp"]["tools"] == ["research_fundamentals", "research_token"]
+    assert m["mcp"]["tools"] == ["research_fundamentals", "research_token", "research_macro"]
 
 
 def test_discovery_manifest_is_deterministic() -> None:
@@ -93,7 +93,9 @@ def test_discovery_manifest_is_deterministic() -> None:
 
 def test_mcp_tool_catalog_mirrors_products() -> None:
     tools = mcp_tool_catalog()
-    assert {t["name"] for t in tools} == {mcp_tool_name("fundamentals"), mcp_tool_name("token")}
+    assert {t["name"] for t in tools} == {mcp_tool_name("fundamentals"), mcp_tool_name("token"), mcp_tool_name("macro")}
     for t in tools:
         assert t["price_usd"] > 0
-        assert "ticker" in t["input_schema"]["properties"] or "token" in t["input_schema"]["properties"]
+        props = t["input_schema"]["properties"]
+        # each product advertises its identifier param (ticker / token / region)
+        assert any(p in props for p in ("ticker", "token", "region"))
