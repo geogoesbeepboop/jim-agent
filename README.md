@@ -40,11 +40,13 @@ src/jim/
     edgar.py            # SEC EDGAR client: ticker→CIK→XBRL facts (free upstream)
     facts.py            # cited data model + derived-metric computation
     gate.py             # the provable sourcing gate (deterministic, no LLM)
+    completeness.py     # the gate's mirror: flags material facts the memo omitted
     synthesize.py       # Anthropic synthesizer → cited memo (human/agent modes)
-    judge.py            # optional LLM faithfulness judge (semantic backstop)
+    judge.py            # LLM faithfulness judge: per-claim checklist + Sonnet tier
     budget.py           # per-query budget cap (propose/dispose)
     products.py         # registry: fundamentals→EDGAR, token→The Graph
-    engine.py           # LangGraph: gather → synthesize → gate(retry) → judge
+    engine.py           # LangGraph: gather → memo-cache → synthesize → gate(retry) → judge
+  eval/rubric.py        # weighted "better output" score (sourcing+completeness+…)
   sources/              # Source interface: EDGAR (free) + The Graph (paid x402)
   monitors/             # Phase 4: scheduled diff-driven monitors (the "motley crew")
     diff.py             # deterministic snapshot diffing (baseline → fresh)
@@ -139,6 +141,35 @@ uv run jim-research AAPL                  # now includes debate + Market Cap, P/
 uv run jim-eval --gate-only               # offline: planted hallucinations must be blocked (no key)
 uv run jim-eval AAPL MSFT                 # live: debate vs single-pass lift (needs key)
 ```
+
+## Research quality: memo cache, completeness, judge, rubric
+
+Four upgrades to "is the answer good?" — see
+[ADR-0006](docs/adr/0006-research-quality-memo-cache-completeness-judge-rubric.md).
+
+- **Memo cache.** After `gather`, jim fingerprints the fresh snapshot; if a recent
+  memo for `{product}:{identifier}:{mode}` was written from **identical** data and
+  still passes the deterministic gate, it's served directly — synthesis/debate/judge
+  are skipped and **inference cost is $0**. Moved data (a new price) changes the
+  fingerprint and correctly re-synthesizes, so the cache only hits when nothing
+  changed. The gate re-check means a cached memo can never ship unsourced.
+- **Completeness check.** The gate's mirror image — it flags **material** snapshot
+  facts the memo *omitted* (deterministic, no key). A signal, not a gate: it lowers
+  the quality score and is surfaced, but never rejects a run.
+- **Structured judge.** The faithfulness judge returns a **per-claim checklist**
+  (each claim → supported? which citation? why), and high-stakes runs upgrade to a
+  stronger model (`JUDGE_HIGH_STAKES_MODEL`).
+- **Eval rubric.** A weighted composite over sourcing + completeness + impersonal
+  (all deterministic, no key) plus faithfulness when live — so "better output" is a
+  number, computable offline.
+
+```bash
+uv run jim-research AAPL                  # 2nd identical run → "(memo cache — $0 inference)"
+uv run jim-research AAPL --no-cache       # force a fresh synthesis
+uv run jim-research NVDA --high-stakes    # upgrade the faithfulness judge to Sonnet
+uv run jim-eval AAPL MSFT                 # report now includes material coverage + composite rubric
+```
+> New table: run `uv run jim-initdb` once to create `memo_cache`.
 
 ## Two-sided + margin (Phase 2)
 
@@ -292,6 +323,10 @@ uv run pytest          # all offline, no wallet/network/API key/DB:
                        #  · payments: settlement receipt decode, audit middleware
                        #    (records buyer + tx, fails open), admin revenue/buyer
                        #    rollup, wallet paywall served to browsers not agents
+                       #  · research quality: memo cache (fingerprint hit/miss/TTL,
+                       #    engine serves 2nd identical query at $0 inference),
+                       #    completeness omissions, per-claim judge + Sonnet tier,
+                       #    weighted eval rubric (offline composite)
 ```
 
 > Tests are hermetic by design (a `conftest.py` neutralises `DATABASE_URL` /

@@ -89,6 +89,13 @@ class Store(Protocol):
     async def receipts_summary(self) -> dict: ...
     async def upsert_insight(self, *, key: str, text: str, embedding: list[float]) -> None: ...
     async def search_insights(self, embedding: list[float], k: int = 5) -> list[dict]: ...
+    # --- memo cache (serve a recent identical memo, skip re-synthesis) ---
+    async def get_cached_memo(
+        self, *, key: str, fingerprint: str, ttl_seconds: int
+    ) -> dict | None: ...
+    async def put_cached_memo(
+        self, *, key: str, fingerprint: str, memo: str, debate: str | None
+    ) -> None: ...
     # --- Phase 4: monitors ---
     async def save_monitor(self, row: dict) -> None: ...
     async def get_monitor(self, monitor_id: str) -> dict | None: ...
@@ -113,6 +120,7 @@ class MemoryStore:
     monitors: dict[str, dict] = field(default_factory=dict)
     monitor_runs: list[dict] = field(default_factory=list)
     receipts: list[dict] = field(default_factory=list)
+    memos: dict[str, dict] = field(default_factory=dict)
 
     async def get_cached_purchase(self, source, key):
         row = self.purchases.get((source, key))
@@ -227,6 +235,23 @@ class MemoryStore:
         ]
         scored.sort(key=lambda r: r["score"], reverse=True)
         return scored[:k]
+
+    async def get_cached_memo(self, *, key, fingerprint, ttl_seconds):
+        row = self.memos.get(key)
+        if not row or row["fingerprint"] != fingerprint:
+            return None
+        age = (_utcnow() - row["created_at"]).total_seconds()
+        if age > ttl_seconds:
+            return None
+        return {"memo": row["memo"], "debate": row.get("debate"), "age_seconds": age}
+
+    async def put_cached_memo(self, *, key, fingerprint, memo, debate):
+        self.memos[key] = {
+            "fingerprint": fingerprint,
+            "memo": memo,
+            "debate": debate,
+            "created_at": _utcnow(),
+        }
 
     # --- Phase 4: monitors ---
     async def save_monitor(self, row):
@@ -470,6 +495,42 @@ class SqlStore:
                 {"cache_key": r[0].cache_key, "text": r[0].text, "score": 1.0 - float(r[1])}
                 for r in rows
             ]
+
+    async def get_cached_memo(self, *, key, fingerprint, ttl_seconds):
+        from sqlalchemy import select
+        from jim.store.models import MemoCacheEntry
+
+        async with self._sm() as s:
+            row = (
+                await s.execute(select(MemoCacheEntry).where(MemoCacheEntry.cache_key == key))
+            ).scalar_one_or_none()
+            if not row or row.fingerprint != fingerprint:
+                return None
+            age = (_utcnow() - row.created_at).total_seconds()
+            if age > ttl_seconds:
+                return None
+            return {"memo": row.memo, "debate": row.debate, "age_seconds": age}
+
+    async def put_cached_memo(self, *, key, fingerprint, memo, debate):
+        from sqlalchemy import select
+        from jim.store.models import MemoCacheEntry
+
+        async with self._sm() as s:
+            existing = (
+                await s.execute(select(MemoCacheEntry).where(MemoCacheEntry.cache_key == key))
+            ).scalar_one_or_none()
+            if existing:
+                existing.fingerprint = fingerprint
+                existing.memo = memo
+                existing.debate = debate
+                existing.created_at = _utcnow()  # reset freshness window on new data
+            else:
+                s.add(
+                    MemoCacheEntry(
+                        cache_key=key, fingerprint=fingerprint, memo=memo, debate=debate
+                    )
+                )
+            await s.commit()
 
     # --- Phase 4: monitors ---
     async def save_monitor(self, row):

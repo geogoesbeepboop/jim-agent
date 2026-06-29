@@ -87,6 +87,23 @@ class Snapshot:
                 return f
         return None
 
+    def fingerprint(self) -> str:
+        """A stable hash of the underlying data — the memo cache's identity key.
+
+        Built from (label, unit, value) over all facts plus entity/as-of, so two
+        gathers of *unchanged* data hash identically while any moved number (a new
+        price, a fresh filing) changes the hash and correctly invalidates the cache.
+        Independent of the C# id scheme (sorts by label) and tolerant of float
+        jitter (values rounded), so it tracks real data changes, not noise."""
+        import hashlib
+
+        parts = [
+            f"{f.label}|{f.unit}|{round(f.value, 4)}"
+            for f in sorted(self.facts, key=lambda x: (x.label, x.unit))
+        ]
+        raw = f"{self.ticker}|{self.cik}|{self.as_of}|" + "||".join(parts)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
     @property
     def ids(self) -> set[str]:
         return {f.id for f in self.facts}
