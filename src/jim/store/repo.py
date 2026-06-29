@@ -68,6 +68,25 @@ class Store(Protocol):
     ) -> None: ...
     async def margin_summary(self) -> dict: ...
     async def recent_queries(self, limit: int = 20) -> list[dict]: ...
+    # --- settlement audit log (the on-chain revenue trail) ---
+    async def record_receipt(
+        self,
+        *,
+        tx_hash: str | None,
+        payer: str | None,
+        pay_to: str | None,
+        amount_usdc: float,
+        network: str,
+        path: str,
+        product: str | None,
+        identifier: str | None,
+        mode: str | None,
+        status_code: int,
+        success: bool,
+        receipt: dict,
+    ) -> None: ...
+    async def recent_receipts(self, limit: int = 50) -> list[dict]: ...
+    async def receipts_summary(self) -> dict: ...
     async def upsert_insight(self, *, key: str, text: str, embedding: list[float]) -> None: ...
     async def search_insights(self, embedding: list[float], k: int = 5) -> list[dict]: ...
     # --- Phase 4: monitors ---
@@ -93,6 +112,7 @@ class MemoryStore:
     insights: dict[str, dict] = field(default_factory=dict)
     monitors: dict[str, dict] = field(default_factory=dict)
     monitor_runs: list[dict] = field(default_factory=list)
+    receipts: list[dict] = field(default_factory=list)
 
     async def get_cached_purchase(self, source, key):
         row = self.purchases.get((source, key))
@@ -155,6 +175,47 @@ class MemoryStore:
     async def recent_queries(self, limit=20):
         rows = sorted(self.queries, key=lambda q: q["created_at"], reverse=True)[:limit]
         return [_query_view(q) for q in rows]
+
+    async def record_receipt(
+        self,
+        *,
+        tx_hash,
+        payer,
+        pay_to,
+        amount_usdc,
+        network,
+        path,
+        product,
+        identifier,
+        mode,
+        status_code,
+        success,
+        receipt,
+    ):
+        self.receipts.append(
+            {
+                "tx_hash": tx_hash,
+                "payer": payer,
+                "pay_to": pay_to,
+                "amount_usdc": amount_usdc,
+                "network": network,
+                "path": path,
+                "product": product,
+                "identifier": identifier,
+                "mode": mode,
+                "status_code": status_code,
+                "success": success,
+                "receipt": receipt,
+                "created_at": _utcnow(),
+            }
+        )
+
+    async def recent_receipts(self, limit=50):
+        rows = sorted(self.receipts, key=lambda r: r["created_at"], reverse=True)[:limit]
+        return [_receipt_view(r) for r in rows]
+
+    async def receipts_summary(self):
+        return _summarize_receipts(self.receipts)
 
     async def upsert_insight(self, *, key, text, embedding):
         self.insights[key] = {"text": text, "embedding": embedding}
@@ -318,6 +379,69 @@ class SqlStore:
                 .all()
             )
             return [_query_view(_record_dict(r)) for r in rows]
+
+    async def record_receipt(
+        self,
+        *,
+        tx_hash,
+        payer,
+        pay_to,
+        amount_usdc,
+        network,
+        path,
+        product,
+        identifier,
+        mode,
+        status_code,
+        success,
+        receipt,
+    ):
+        from jim.store.models import PaymentReceipt
+
+        async with self._sm() as s:
+            s.add(
+                PaymentReceipt(
+                    tx_hash=tx_hash,
+                    payer=payer,
+                    pay_to=pay_to,
+                    amount_usdc=amount_usdc,
+                    network=network,
+                    path=path,
+                    product=product,
+                    identifier=identifier,
+                    mode=mode,
+                    status_code=status_code,
+                    success=success,
+                    receipt=receipt,
+                )
+            )
+            await s.commit()
+
+    async def recent_receipts(self, limit=50):
+        from sqlalchemy import select
+        from jim.store.models import PaymentReceipt
+
+        async with self._sm() as s:
+            rows = (
+                (
+                    await s.execute(
+                        select(PaymentReceipt)
+                        .order_by(PaymentReceipt.created_at.desc())
+                        .limit(limit)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return [_receipt_view(_receipt_dict(r)) for r in rows]
+
+    async def receipts_summary(self):
+        from sqlalchemy import select
+        from jim.store.models import PaymentReceipt
+
+        async with self._sm() as s:
+            rows = (await s.execute(select(PaymentReceipt))).scalars().all()
+            return _summarize_receipts([_receipt_dict(r) for r in rows])
 
     async def upsert_insight(self, *, key, text, embedding):
         from sqlalchemy import select
@@ -493,6 +617,72 @@ def _record_dict(r) -> dict:
         "cache_hit": r.cache_hit,
         "attempts": r.attempts,
         "created_at": r.created_at,
+    }
+
+
+def _receipt_dict(r) -> dict:
+    return {
+        "tx_hash": r.tx_hash,
+        "payer": r.payer,
+        "pay_to": r.pay_to,
+        "amount_usdc": r.amount_usdc,
+        "network": r.network,
+        "path": r.path,
+        "product": r.product,
+        "identifier": r.identifier,
+        "mode": r.mode,
+        "status_code": r.status_code,
+        "success": r.success,
+        "receipt": r.receipt,
+        "created_at": r.created_at,
+    }
+
+
+def _receipt_view(r: dict) -> dict:
+    return {
+        "tx_hash": r["tx_hash"],
+        "payer": r["payer"],
+        "pay_to": r["pay_to"],
+        "amount_usdc": round(r["amount_usdc"], 6),
+        "network": r["network"],
+        "path": r["path"],
+        "product": r["product"],
+        "identifier": r["identifier"],
+        "mode": r["mode"],
+        "status_code": r["status_code"],
+        "success": r["success"],
+        "created_at": r["created_at"].isoformat()
+        if hasattr(r["created_at"], "isoformat")
+        else r["created_at"],
+    }
+
+
+def _summarize_receipts(receipts: list[dict]) -> dict:
+    """Settlement-side rollup for the admin audit view: settled revenue, the
+    set of distinct buyer addresses, and a per-product breakdown. Only
+    successful settlements count toward revenue."""
+    settled = [r for r in receipts if r.get("success")]
+    revenue = sum(r.get("amount_usdc", 0.0) for r in settled)
+    buyers: dict[str, dict] = {}
+    by_product: dict[str, dict] = {}
+    for r in settled:
+        payer = (r.get("payer") or "unknown").lower()
+        b = buyers.setdefault(payer, {"address": payer, "payments": 0, "spent_usdc": 0.0})
+        b["payments"] += 1
+        b["spent_usdc"] = round(b["spent_usdc"] + r.get("amount_usdc", 0.0), 6)
+        prod = r.get("product") or "other"
+        p = by_product.setdefault(prod, {"product": prod, "payments": 0, "revenue_usdc": 0.0})
+        p["payments"] += 1
+        p["revenue_usdc"] = round(p["revenue_usdc"] + r.get("amount_usdc", 0.0), 6)
+    top_buyers = sorted(buyers.values(), key=lambda b: b["spent_usdc"], reverse=True)
+    return {
+        "settlements": len(settled),
+        "total_receipts": len(receipts),
+        "revenue_usdc": round(revenue, 6),
+        "unique_buyers": len(buyers),
+        "avg_payment_usdc": round(revenue / len(settled), 6) if settled else 0.0,
+        "by_product": sorted(by_product.values(), key=lambda p: p["revenue_usdc"], reverse=True),
+        "top_buyers": top_buyers[:10],
     }
 
 

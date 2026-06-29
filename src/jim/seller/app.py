@@ -24,12 +24,15 @@ from pydantic import BaseModel, Field
 
 from x402.http import FacilitatorConfig, HTTPFacilitatorClient, PaymentOption
 from x402.http.middleware.fastapi import PaymentMiddlewareASGI
+from x402.http.paywall import create_paywall, evm_paywall
 from x402.http.types import RouteConfig
 from x402.mechanisms.evm.exact import ExactEvmServerScheme
 from x402.server import x402ResourceServer
 
+from jim.admin import admin_dashboard
 from jim.config import Settings, get_settings
 from jim.dashboard import margin_dashboard
+from jim.seller.audit import PaymentAuditMiddleware
 from jim.marketplace.catalog import build_catalog, listing_for
 from jim.marketplace.discovery import discovery_manifest
 from jim.marketplace.mainnet import check_mainnet_readiness
@@ -149,7 +152,25 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             description="Mock 'The Graph' vendor (testnet stand-in). Uniswap-v3 shape.",
         ),
     }
-    app.add_middleware(PaymentMiddlewareASGI, routes=routes, server=server)
+
+    # A browser that hits a paid route unpaid gets x402's bundled wallet paywall
+    # (MetaMask / Coinbase Wallet / WalletConnect → real EIP-3009 settlement).
+    # Agents (Accept: application/json) still get the machine-readable 402, so
+    # this is purely additive for humans. See ADR-0005.
+    paywall_provider = (
+        create_paywall()
+        .with_network(evm_paywall)
+        .with_config(app_name=settings.service_name, testnet=not settings.is_mainnet)
+        .build()
+    )
+
+    # Middleware order matters: the LAST `add_middleware` is the OUTERMOST. The
+    # audit layer must wrap the payment layer so it can read the PAYMENT-RESPONSE
+    # settlement header the payment layer writes *after* the handler returns.
+    app.add_middleware(
+        PaymentMiddlewareASGI, routes=routes, server=server, paywall_provider=paywall_provider
+    )
+    app.add_middleware(PaymentAuditMiddleware)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -204,6 +225,18 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     async def dashboard() -> dict:
         """Free. Per-query margin: revenue − data cost − inference cost."""
         return await margin_dashboard()
+
+    @app.get("/admin/audit")
+    async def admin_audit(limit: int = Query(50, ge=1, le=500)) -> dict:
+        """Free. The settlement audit trail: revenue, buyers, on-chain receipts."""
+        return await admin_dashboard(limit)
+
+    @app.get("/admin", response_class=HTMLResponse)
+    async def admin() -> str:
+        """Free. The admin dashboard (settlements + on-chain audit), in the browser."""
+        from jim.admin import admin_html
+
+        return admin_html(await admin_dashboard(), settings.service_name)
 
     # --- Phase 5: marketplace, discovery, the human UI, the system map -------
 
