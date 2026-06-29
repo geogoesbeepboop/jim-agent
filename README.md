@@ -47,7 +47,9 @@ src/jim/
     products.py         # registry: fundamentals→EDGAR, token→The Graph
     engine.py           # LangGraph: gather → memo-cache → synthesize → gate(retry) → judge
   eval/rubric.py        # weighted "better output" score (sourcing+completeness+…)
-  sources/              # Source interface: EDGAR (free) + The Graph (paid x402)
+  sources/              # Source interface: EDGAR + macro (free) · The Graph (paid x402)
+    thegraph.py         # multi-chain Uniswap-v3 (ETH/Base/Arbitrum/Polygon) over x402
+    macro.py            # free public-domain macro: Fed funds · CPI · Treasury yields
   monitors/             # Phase 4: scheduled diff-driven monitors (the "motley crew")
     diff.py             # deterministic snapshot diffing (baseline → fresh)
     triggers.py         # the crew: price/threshold/MA-cross/new-filing watchers
@@ -188,9 +190,10 @@ uv run jim-initdb
 uv run jim-seller
 
 # 3. Buy on-chain token research; jim pays The Graph (mock) under the hood
-uv run jim-research WETH --product token        # local run
-uv run python scripts/precompute.py             # warm WETH/WBTC/UNI into cache
-uv run python scripts/research_demo.py WETH     # full paid round-trip (optional)
+uv run jim-research WETH --product token         # Uniswap v3 · Ethereum (default)
+uv run jim-research AERO:base --product token     # multi-chain: :chain suffix (ADR-0007)
+uv run jim-research ARB:arbitrum --product token  # Base / Arbitrum / Polygon supported
+uv run python scripts/precompute.py              # warm WETH/WBTC/UNI into cache
 
 # 4. See the economics: price_out − data_cost − inference = margin
 uv run jim-dashboard                             # or: GET http://localhost:4021/dashboard
@@ -198,8 +201,28 @@ uv run jim-dashboard                             # or: GET http://localhost:4021
 
 `price_out − data_cost − inference_cost = margin`. The first buy of a token costs
 `data_cost`; the cache makes every later sale within the TTL pure margin —
-"buy a datum once, resell derived insight many times". Check the live endpoint
-price before spending with `uv run python scripts/graph_probe.py WETH`.
+"buy a datum once, resell derived insight many times". The live x402 price is
+**dynamic and unpublished**, so the buy path enforces a hard **price cap** (refuses
+above the per-query budget) and `graph_probe` audits it before a mainnet cutover:
+
+```bash
+uv run python scripts/graph_probe.py WETH         # decode the live price + PASS/FAIL vs budget
+uv run python scripts/graph_probe.py AERO:base    # chain-aware
+```
+
+### Macro context (free, public-domain)
+
+A third product, `macro`, cites **US-government primary sources** (Fed funds, CPI,
+Treasury yields + 2s10s) — public domain, redistributable, $0 data cost (pure
+margin). Deliberately not FRED (its ToS forbids redistribution); jim goes straight
+to the Fed / BLS / Treasury. Proprietary sources (earnings transcripts, forward-EPS
+estimates, index levels) were **researched and refused** — they prohibit
+redistribution and break the public-domain invariant. See
+[ADR-0007](docs/adr/0007-data-source-economics-multichain-macro.md).
+
+```bash
+uv run jim-research US --product macro            # cited Fed funds / CPI / Treasury snapshot
+```
 
 ## Monitors (Phase 4)
 
@@ -327,6 +350,9 @@ uv run pytest          # all offline, no wallet/network/API key/DB:
                        #    engine serves 2nd identical query at $0 inference),
                        #    completeness omissions, per-claim judge + Sonnet tier,
                        #    weighted eval rubric (offline composite)
+                       #  · data sources: multi-chain token resolve + cache isolation,
+                       #    free macro source (cited gov data, 2s10s, degrades),
+                       #    dynamic-price cap guard (refuses over-budget x402 price)
 ```
 
 > Tests are hermetic by design (a `conftest.py` neutralises `DATABASE_URL` /

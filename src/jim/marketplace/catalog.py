@@ -51,8 +51,25 @@ _SPECS: dict[str, dict] = {
         "upstream": "The Graph (Uniswap v3) over x402",
         "description": (
             "A cited on-chain token snapshot — price, TVL, volume, supply — with "
-            "upstream data bought from The Graph over x402. This is the two-sided "
-            "product: your payment funds a run in which jim itself pays for data."
+            "upstream data bought from The Graph over x402. Multi-chain: append "
+            ":chain to the symbol (WETH:base, AERO:base, ARB:arbitrum). This is "
+            "the two-sided product: your payment funds a run in which jim itself "
+            "pays for data."
+        ),
+    },
+    "macro": {
+        "title": "US Macro Context",
+        "verb": "GET",
+        "path": "/research/macro",
+        "param": "region",
+        "param_example": "US",
+        "tags": ["macro", "rates", "cpi", "treasury", "cited"],
+        "upstream": "US government (Fed, BLS, Treasury) — public domain",
+        "description": (
+            "A cited US macro snapshot — Fed funds (effective), CPI inflation, and "
+            "the 2y/10y Treasury yields with the 2s10s spread. Every figure traces "
+            "to a US-government primary source (public domain, redistributable); "
+            "the data is free, so this is a pure-margin product like fundamentals."
         ),
     },
 }

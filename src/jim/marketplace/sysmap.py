@@ -133,10 +133,12 @@ def system_graph(settings: Settings | None = None) -> SystemGraph:
     # --- Sources ---
     g.add(Node("fundamentals_src", "FundamentalsSource<br/>(free)", "sources", "source"))
     graph_badge = "PAID · live" if s.graph_live else "PAID · mock"
-    g.add(Node("graph_src", f"GraphSource<br/>({graph_badge})", "sources", "source"))
+    g.add(Node("graph_src", f"GraphSource<br/>({graph_badge} · multi-chain)", "sources", "source"))
+    g.add(Node("macro_src", "MacroSource<br/>(free · public-domain)", "sources", "source"))
 
     # --- External tools ---
     g.add(Node("edgar", "SEC EDGAR<br/>(public domain)", "external", "external"))
+    g.add(Node("govdata", "US gov data<br/>Fed · BLS · Treasury", "external", "external"))
     if s.enable_prices:
         g.add(Node("yahoo", "Yahoo charts<br/>(price/technicals)", "external", "external"))
     if s.graph_live:
@@ -205,6 +207,8 @@ def system_graph(settings: Settings | None = None) -> SystemGraph:
     # Gather → sources → externals.
     g.link("gather", "fundamentals_src")
     g.link("gather", "graph_src")
+    g.link("gather", "macro_src")
+    g.link("macro_src", "govdata", "public domain")
     g.link("fundamentals_src", "edgar")
     if s.enable_prices:
         g.link("fundamentals_src", "yahoo")

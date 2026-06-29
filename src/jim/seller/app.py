@@ -60,7 +60,7 @@ class PingResponse(BaseModel):
 class CheckoutRequest(BaseModel):
     """Body for ``POST /ui/checkout`` — the human UI's research request."""
 
-    product: str = Field(default="fundamentals", pattern="^(fundamentals|token)$")
+    product: str = Field(default="fundamentals", pattern="^(fundamentals|token|macro)$")
     identifier: str
     mode: str = Field(default="human", pattern="^(human|agent)$")
     settle: bool | None = Field(
@@ -145,6 +145,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         ),
         "GET /research/fundamentals": _product_route("fundamentals", settings.research_price),
         "GET /research/token": _product_route("token", settings.token_research_price),
+        "GET /research/macro": _product_route("macro", settings.macro_research_price),
         # The testnet mock-Graph vendor: a PAID upstream that jim buys from.
         "POST /mock-graph/subgraphs/*": RouteConfig(
             accepts=_pay(settings.mock_graph_price),
@@ -211,6 +212,21 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         data. Margin = price_out − data_cost − inference_cost (see /dashboard).
         """
         result = await run_research(token, product="token", mode=mode)
+        if result.status == "error":
+            raise HTTPException(status_code=422, detail=result.error)
+        return ResearchResponse.from_result(result)
+
+    @app.get("/research/macro", response_model=ResearchResponse)
+    async def macro(
+        region: str = Query("US", description="Region (US only today)"),
+        mode: str = Query("human", pattern="^(human|agent)$"),
+    ) -> ResearchResponse:
+        """Paid. A cited US macro snapshot (Fed funds, CPI, Treasury yields).
+
+        Free, public-domain upstream (Fed/BLS/Treasury), so this is pure margin
+        like fundamentals — no buy leg. Reaching here means settlement succeeded.
+        """
+        result = await run_research(region, product="macro", mode=mode)
         if result.status == "error":
             raise HTTPException(status_code=422, detail=result.error)
         return ResearchResponse.from_result(result)
