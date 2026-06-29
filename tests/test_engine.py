@@ -60,7 +60,7 @@ class FakeSource:
 def _mock_io(monkeypatch):
     reset_store()  # fresh in-memory store per test
 
-    async def fake_judge(memo, snapshot) -> JudgeResult:
+    async def fake_judge(memo, snapshot, **_) -> JudgeResult:
         return JudgeResult.skip()
 
     async def fake_debate(snapshot) -> DebateResult:

@@ -35,10 +35,29 @@ class SourcingOut(BaseModel):
     violations: list[str] = Field(default_factory=list)
 
 
+class ClaimOut(BaseModel):
+    claim: str
+    supported: bool
+    citation: str | None = None
+    reason: str = ""
+
+
 class FaithfulnessOut(BaseModel):
     evaluated: bool
     score: float
     issues: list[str] = Field(default_factory=list)
+    model: str | None = None
+    claims: list[ClaimOut] = Field(default_factory=list)
+
+
+class CompletenessOut(BaseModel):
+    """What the memo left out (signal, not gate): coverage of all facts, of the
+    *material* line items, and the material facts it never cited."""
+
+    coverage: float
+    material_coverage: float
+    passed: bool
+    material_omissions: list[str] = Field(default_factory=list)
 
 
 class FundamentalsResponse(BaseModel):
@@ -59,7 +78,9 @@ class FundamentalsResponse(BaseModel):
     citations: list[CitationOut]
     sourcing: SourcingOut | None
     faithfulness: FaithfulnessOut | None
+    completeness: CompletenessOut | None = None  # what the memo omitted (signal)
     debate: str | None = None  # bull/bear/judge adversarial review (Phase 3)
+    served_from_cache: bool = False  # memo cache hit → 0 inference cost
     cost: dict
     attempts: int
     disclaimer: str
@@ -102,8 +123,20 @@ class FundamentalsResponse(BaseModel):
                 evaluated=not result.judge.skipped,
                 score=round(result.judge.score, 3),
                 issues=result.judge.issues,
+                model=result.judge.model,
+                claims=[ClaimOut(**c.to_dict()) for c in result.judge.claims],
             )
             if result.judge
+            else None
+        )
+        completeness = (
+            CompletenessOut(
+                coverage=round(result.completeness.coverage, 4),
+                material_coverage=round(result.completeness.material_coverage, 4),
+                passed=result.completeness.passed,
+                material_omissions=[o["label"] for o in result.completeness.material_omissions],
+            )
+            if result.completeness
             else None
         )
         return cls(
@@ -118,7 +151,9 @@ class FundamentalsResponse(BaseModel):
             citations=citations,
             sourcing=sourcing,
             faithfulness=faithfulness,
+            completeness=completeness,
             debate=result.debate,
+            served_from_cache=result.served_from_cache,
             cost=result.cost,
             attempts=result.attempts,
             disclaimer=DISCLAIMER,

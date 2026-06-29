@@ -53,7 +53,9 @@ class RunMetrics:
     status: str
     gate_passed: bool = False
     coverage: float = 0.0
+    material_coverage: float = 0.0
     faithfulness: float | None = None
+    rubric_composite: float = 0.0
     n_facts: int = 0
     attempts: int = 0
     inference_cost_usd: float = 0.0
@@ -61,16 +63,35 @@ class RunMetrics:
 
 
 async def _run_one(ticker: str, variant: str) -> RunMetrics:
+    from jim.eval.rubric import score_memo
     from jim.research.engine import run_research
 
-    result = await run_research(ticker, enable_debate=(variant == "debate"))
+    # Disable the memo cache so single_pass vs debate are compared head-to-head,
+    # never short-circuited by a memo a prior variant cached.
+    result = await run_research(
+        ticker, enable_debate=(variant == "debate"), use_memo_cache=False
+    )
+    faithfulness = result.judge.score if result.judge and not result.judge.skipped else None
+    composite = 0.0
+    if result.memo and result.snapshot is not None:
+        composite = score_memo(
+            result.memo,
+            result.snapshot,
+            gate=result.gate,
+            completeness=result.completeness,
+            faithfulness=faithfulness,
+        ).composite
     return RunMetrics(
         ticker=ticker,
         variant=variant,
         status=result.status,
         gate_passed=bool(result.gate and result.gate.passed),
         coverage=round(result.gate.coverage, 4) if result.gate else 0.0,
-        faithfulness=(result.judge.score if result.judge and not result.judge.skipped else None),
+        material_coverage=(
+            round(result.completeness.material_coverage, 4) if result.completeness else 0.0
+        ),
+        faithfulness=faithfulness,
+        rubric_composite=round(composite, 4),
         n_facts=len(result.snapshot.facts) if result.snapshot else 0,
         attempts=result.attempts,
         inference_cost_usd=result.cost.get("inference_cost_usd", 0.0),
@@ -87,7 +108,11 @@ def _aggregate(rows: list[RunMetrics]) -> dict:
         "gate_pass_rate": round(sum(r.gate_passed for r in rows) / n, 4) if n else 0.0,
         "ok_rate": round(len(ok) / n, 4) if n else 0.0,
         "mean_coverage": round(sum(r.coverage for r in rows) / n, 4) if n else 0.0,
+        "mean_material_coverage": round(sum(r.material_coverage for r in rows) / n, 4)
+        if n
+        else 0.0,
         "mean_faithfulness": round(sum(faiths) / len(faiths), 4) if faiths else None,
+        "mean_rubric": round(sum(r.rubric_composite for r in rows) / n, 4) if n else 0.0,
         "mean_facts": round(sum(r.n_facts for r in rows) / n, 1) if n else 0.0,
         "mean_inference_cost_usd": round(sum(r.inference_cost_usd for r in rows) / n, 5)
         if n
@@ -132,11 +157,15 @@ async def run_eval(tickers: list[str] | None = None, *, live: bool = True) -> Ev
     report.rows = [asdict(r) for r in rows]
     report.lift = {
         "gate_pass_rate": round(db["gate_pass_rate"] - sp["gate_pass_rate"], 4),
+        "mean_material_coverage": round(
+            db["mean_material_coverage"] - sp["mean_material_coverage"], 4
+        ),
         "mean_faithfulness": (
             round((db["mean_faithfulness"] or 0) - (sp["mean_faithfulness"] or 0), 4)
             if db["mean_faithfulness"] is not None and sp["mean_faithfulness"] is not None
             else None
         ),
+        "mean_rubric": round(db["mean_rubric"] - sp["mean_rubric"], 4),
         "mean_facts": round(db["mean_facts"] - sp["mean_facts"], 1),
     }
 

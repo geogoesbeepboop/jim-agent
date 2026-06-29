@@ -50,7 +50,7 @@ async def _fake_synth(snapshot, *, mode="human", feedback=None, debate=None) -> 
 def _wire_offline_token(monkeypatch):
     monkeypatch.setattr(engine, "synthesize", _fake_synth)
 
-    async def fake_judge(memo, snapshot):
+    async def fake_judge(memo, snapshot, **_):
         return JudgeResult.skip()
 
     async def fake_debate(snapshot):

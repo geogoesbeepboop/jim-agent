@@ -59,6 +59,21 @@ class Settings(BaseSettings):
     research_max_attempts: int = 2  # synthesize retries on a gate failure
     enable_judge: bool = True
     judge_threshold: float = 0.8  # faithfulness score below this fails the run
+    # High-stakes runs upgrade the faithfulness judge to a stronger model (per-claim
+    # checklist still applies). Used when run_research(high_stakes=True).
+    judge_high_stakes_model: str = "claude-sonnet-4-6"
+
+    # --- Research quality: memo cache + completeness -----------------------
+    # Before synthesizing, serve a recent cached memo for {product}:{identifier}:
+    # {mode} when the freshly-gathered snapshot is byte-identical (fingerprint) and
+    # the cached memo still passes the deterministic gate — eliminating redundant
+    # inference on repeated identical queries. Volatile data (moving prices) changes
+    # the fingerprint, so it correctly re-synthesizes; only truly-unchanged data hits.
+    memo_cache_enabled: bool = True
+    memo_cache_ttl_seconds: int = 86_400  # also bound freshness even if data looks same
+    # Completeness is a signal, not a gate: omitting a material line item lowers the
+    # quality score but never rejects a run (terse agent mode legitimately omits).
+    completeness_material_floor: float = 0.6  # share of material facts cited to "pass"
 
     # --- Phase 3: expanded metrics + adversarial debate --------------------
     enable_prices: bool = True  # enrich equities with market/technical metrics

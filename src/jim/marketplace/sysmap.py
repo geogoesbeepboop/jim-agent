@@ -117,13 +117,16 @@ def system_graph(settings: Settings | None = None) -> SystemGraph:
 
     # --- Engine nodes ---
     g.add(Node("gather", "gather", "engine", "engine"))
+    if s.memo_cache_enabled:
+        g.add(Node("memo_cache", "memo cache<br/>(identical → $0 inference)", "engine", "engine"))
     if s.enable_debate:
         g.add(Node("debate", "debate<br/>(bull ∥ bear → judge)", "engine", "engine"))
     g.add(Node("synthesize", "synthesize<br/>(LLM memo)", "engine", "engine"))
-    g.add(Node("judge", "faithfulness judge", "engine", "engine"))
+    g.add(Node("judge", "faithfulness judge<br/>(per-claim · Sonnet tier)", "engine", "engine"))
 
     # --- Trust gates ---
     g.add(Node("gate", "sourcing gate<br/>(no LLM)", "trust", "gate"))
+    g.add(Node("completeness", "completeness<br/>(omission signal)", "trust", "gate"))
     g.add(Node("impersonal", "impersonal guard", "trust", "gate"))
     g.add(Node("budget", "budget cap<br/>(propose/dispose)", "trust", "gate"))
 
@@ -184,14 +187,20 @@ def system_graph(settings: Settings | None = None) -> SystemGraph:
         g.link(f"route_{listing.product}", "gather", "run_research")
 
     # Engine flow.
+    head = "memo_cache" if s.memo_cache_enabled else None
+    if head:
+        g.link("gather", "memo_cache", "fingerprint")
+        g.link("memo_cache", "judge", "hit → serve ($0)")
+    nxt = head or "gather"
     if s.enable_debate:
-        g.link("gather", "debate")
+        g.link(nxt, "debate", "miss" if head else "")
         g.link("debate", "synthesize")
     else:
-        g.link("gather", "synthesize")
+        g.link(nxt, "synthesize", "miss" if head else "")
     g.link("synthesize", "gate", "verify figures")
     g.link("gate", "synthesize", "fail → retry")
     g.link("gate", "judge", "pass")
+    g.link("judge", "completeness", "omission check")
 
     # Gather → sources → externals.
     g.link("gather", "fundamentals_src")
