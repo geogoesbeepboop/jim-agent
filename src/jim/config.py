@@ -201,6 +201,18 @@ class Settings(BaseSettings):
     facilitator_min_usdc: float = 0.0  # smallest settleable amount, if any
     facilitator_fee_bps: float = 0.0  # facilitator fee in basis points, if any
 
+    # --- Phase 6: resilience (timeouts, retries, circuit breaker) -----------
+    # Every free upstream fetch (EDGAR, Yahoo, macro) runs through
+    # jim.net.resilience.resilient_call: a wall-clock timeout per attempt,
+    # bounded retries with exponential backoff + jitter on transport failures,
+    # and a per-host circuit breaker that fails fast once a host looks down.
+    # HTTP 4xx/5xx are never retried — they're semantic, and sources already
+    # handle them. See jim.net.resilience.default_policy().
+    resilience_timeout_seconds: float = 20.0
+    resilience_retries: int = 2
+    resilience_breaker_threshold: int = 5
+    resilience_breaker_reset_seconds: float = 30.0
+
     @property
     def is_mainnet(self) -> bool:
         return self.network == BASE_MAINNET

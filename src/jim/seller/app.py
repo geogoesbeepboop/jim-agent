@@ -36,6 +36,7 @@ from jim.config import Settings, get_settings
 from jim.dashboard import margin_dashboard
 from jim.interop.callchain import CallChainMiddleware
 from jim.seller.audit import PaymentAuditMiddleware
+from jim.marketplace.agentcard import agent_card
 from jim.marketplace.catalog import build_catalog, listing_for
 from jim.marketplace.discovery import discovery_manifest
 from jim.marketplace.mainnet import check_mainnet_readiness
@@ -331,6 +332,11 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     async def well_known_x402(request: Request) -> dict:
         """Free. The discovery manifest agents fetch to learn how to pay us."""
         return discovery_manifest(_request_base_url(request, settings))
+
+    @app.get("/.well-known/agent-card.json")
+    async def well_known_agent_card(request: Request) -> dict:
+        """Free. The A2A agent card — how a peer agent *delegates* tasks to us."""
+        return agent_card(_request_base_url(request, settings))
 
     @app.get("/mainnet/readiness")
     async def mainnet_readiness() -> dict:

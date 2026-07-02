@@ -93,7 +93,14 @@ def system_graph(settings: Settings | None = None) -> SystemGraph:
 
     # --- Discovery ---
     g.add(Node("catalog", "GET /catalog", "discovery", "discovery"))
-    g.add(Node("wellknown", "GET /.well-known/x402<br/>(manifest)", "discovery", "discovery"))
+    g.add(
+        Node(
+            "wellknown",
+            "GET /.well-known/x402<br/>(manifest · agent card)",
+            "discovery",
+            "discovery",
+        )
+    )
     g.add(Node("bazaar", "Bazaar index<br/>(auto on 1st settle)", "discovery", "discovery"))
     g.add(Node("mcp_srv", f"MCP server<br/>{s.public_url}/mcp", "discovery", "discovery"))
 

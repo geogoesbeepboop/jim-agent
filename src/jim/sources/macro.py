@@ -14,7 +14,9 @@ the primary agencies. Equity index levels (S&P 500 etc.) are intentionally absen
 — they are proprietary, with no public-domain path. See ADR-0007.
 
 Best-effort, like the Yahoo enrichment: each upstream is fetched independently and
-a failure simply drops that fact rather than failing the run. The fetcher is
+a failure simply drops that fact rather than failing the run. Each request runs
+under jim.net.resilience (timeout + bounded retries + per-host breaker) first, so
+one flaky agency gets retried before its reading is dropped. The fetcher is
 injectable so the source is fully testable offline.
 """
 
@@ -129,11 +131,16 @@ async def fetch_macro() -> MacroData:
 async def _fetch_effr() -> list[MacroReading]:
     import httpx
 
-    try:
+    from jim.net.resilience import resilient_call
+
+    async def _get() -> dict:
         async with httpx.AsyncClient(timeout=httpx.Timeout(20.0)) as c:
             resp = await c.get(_EFFR_URL)
             resp.raise_for_status()
-            row = resp.json()["refRates"][0]
+            return resp.json()
+
+    try:
+        row = (await resilient_call(_get, host="markets.newyorkfed.org"))["refRates"][0]
         return [
             MacroReading(
                 label="Fed funds rate (effective)",
@@ -153,9 +160,11 @@ async def _fetch_cpi() -> list[MacroReading]:
     import httpx
 
     from jim.config import get_settings
+    from jim.net.resilience import resilient_call
 
     settings = get_settings()
-    try:
+
+    async def _get() -> dict:
         async with httpx.AsyncClient(timeout=httpx.Timeout(20.0)) as c:
             if settings.bls_api_key:
                 resp = await c.post(
@@ -169,7 +178,10 @@ async def _fetch_cpi() -> list[MacroReading]:
             else:
                 resp = await c.get(_BLS_V1)
             resp.raise_for_status()
-            series = resp.json()["Results"]["series"][0]["data"]
+            return resp.json()
+
+    try:
+        series = (await resilient_call(_get, host="api.bls.gov"))["Results"]["series"][0]["data"]
         latest = series[0]
         level = float(latest["value"])
         out = [
@@ -216,12 +228,18 @@ async def _fetch_treasury() -> list[MacroReading]:
 
     import httpx
 
+    from jim.net.resilience import resilient_call
+
     year = datetime.now(timezone.utc).year
-    try:
+
+    async def _get() -> str:
         async with httpx.AsyncClient(timeout=httpx.Timeout(20.0)) as c:
             resp = await c.get(_TREASURY_URL.format(year=year))
             resp.raise_for_status()
-            text = resp.text
+            return resp.text
+
+    try:
+        text = await resilient_call(_get, host="home.treasury.gov")
         # The feed is an Atom document; the last <entry> is the most recent day.
         entries = re.findall(r"<entry>.*?</entry>", text, re.DOTALL)
         if not entries:

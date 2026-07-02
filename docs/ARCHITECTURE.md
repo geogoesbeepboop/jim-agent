@@ -230,9 +230,20 @@ pure-margin product. Equity index levels (S&P 500, sector benchmarks) are
 intentionally absent — proprietary, with no public-domain path. See ADR-0007 for
 the economics and what was refused (proprietary transcripts / EPS estimates).
 
----
+### 5.5 Resilience ([net/resilience.py](../src/jim/net/resilience.py)) — Phase 6
 
-## 6. Procurement, budget, and cache (the margin engine)
+jim already degrades well by *absence* (no key → deterministic fallback, no DB →
+memory store, no Yahoo → EDGAR-only); `resilient_call` adds degradation by
+*failure*. Every free upstream request (EDGAR ticker map + companyfacts, Yahoo
+chart, the three macro agencies) runs under one small helper: a wall-clock
+timeout per attempt, bounded retries with exponential backoff + jitter, and a
+per-host circuit breaker (open after N consecutive transport failures → fail
+fast with `CircuitOpen`; one half-open probe after the cooldown). Only
+transport-level failures and timeouts retry — HTTP 4xx/5xx are semantic and stay
+with the sources' existing handling, so `EdgarError` and the best-effort `None`/
+drop-the-reading paths surface exactly as before. Knobs live in `Settings`
+(`RESILIENCE_*`); like tracing, the wrapper is invisible when upstreams are
+healthy (one request per call).
 
 ### 6.1 Propose / dispose ([base.py](../src/jim/sources/base.py) `procure`, [budget.py](../src/jim/research/budget.py))
 
@@ -493,11 +504,14 @@ key**; the key only buys nicer prose.
 ### 12.5 Delivery and the scheduler
 
 [notify.py](../src/jim/monitors/notify.py) delivers the impersonal, cited payload
-to external channels — `console` and `webhook:<url>` (POSTed with an
-`X-Jim-Signature: sha256=…` HMAC over the exact body, so a subscriber can verify
-authenticity). The store is always the system of record, so a pull *feed* exists
-regardless of channels. Delivery is best-effort: a failing channel is logged, not
-fatal.
+to external channels — `console` and `webhook:<url>`. Webhook POSTs carry three
+headers: `X-Jim-Timestamp` (unix seconds), `X-Jim-Nonce` (uuid4 hex), and
+`X-Jim-Signature: sha256=…` — an HMAC over `f"{timestamp}.{nonce}." + body`, so
+tampering with any of the three breaks verification and a captured delivery
+can't be replayed. Subscribers verify with `verify_delivery()` (constant-time
+compare, staleness window, optional nonce dedup). The store is always the system
+of record, so a pull *feed* exists regardless of channels. Delivery is
+best-effort: a failing channel is logged, not fatal.
 
 [scheduler.py](../src/jim/monitors/scheduler.py) is a dependency-free asyncio
 loop: each tick asks the store for **due** monitors (`next_run_at <= now`), runs
@@ -545,14 +559,22 @@ src/jim/
     products.py          product registry (fundamentals, token)
     cost.py              token usage → USD
     engine.py            LangGraph pipeline + run_research
-  sources/               Source interface + EDGAR/Yahoo/Graph + procurement
+  sources/               Source interface + EDGAR/Yahoo/Graph/peer + procurement
+    peer.py              Phase 7: PeerSource (buy facts from a peer agent over x402)
+                         + CompositeSource (merge peer signals into a product snapshot)
+  net/resilience.py      Phase 6: timeout + retries + per-host circuit breaker for
+                         every free upstream fetch (EDGAR, Yahoo, macro)
+  interop/               Phase 7: the seam between agents
+    callchain.py         X-Jim-Call-Chain: loop + depth refusal before any payment
+    trust.py             per-source trust = gate pass-rate (attribution + Laplace score)
   monitors/              Phase 4: diff, triggers (crew), materiality gate, update,
                          impersonal guard, notify, engine, scheduler, nl, create, CLI
   marketplace/           Phase 5: catalog (+ Bazaar extensions), pricing tiers,
-                         discovery manifest, MCP server, human UI, system map, mainnet
-                         preflight, CLI (jim-market / jim-map / jim-mcp)
-  vendor/mock_graph.py   testnet stand-in for The Graph
-  store/                 Postgres+pgvector cache + margin ledger + monitors (+ embed, CLI)
+                         discovery manifest, agent card, MCP server, human UI, system
+                         map, mainnet preflight, CLI (jim-market / jim-map / jim-mcp)
+  vendor/                testnet stand-ins: mock_graph (The Graph), mock_peer (a peer agent)
+  store/                 Postgres+pgvector cache + margin ledger + monitors + trust
+                         events (+ embed, CLI)
   obs/tracing.py         Langfuse (best-effort)
   eval/                  gate regression + debate-vs-single-pass lift
   dashboard.py           margin + monitor-economics dashboard
@@ -580,6 +602,10 @@ src/jim/
 | Ref-free advertised output schema ([ADR-0003](adr/0003-bazaar-discovery.md)) | A nested `$ref` dangles and indexers reject the listing; inline keeps it valid anywhere. |
 | Read-only mainnet preflight (no auto-spend) ([ADR-0004](adr/0004-mainnet-cutover-and-ui-self-pay.md)) | The one irreversible step gets a dry-run that can't fire the gun. |
 | UI self-pay when funded, else preview ([ADR-0004](adr/0004-mainnet-cutover-and-ui-self-pay.md)) | A wallet-less visitor still exercises the real rail; honest about preview vs paid. |
+| Rejected research is refused, never billed ([ADR-0008](adr/0008-agent-economy-trust-callchain-billing.md)) | The x402 middleware only settles 2xx; a 502 refusal cancels the verified payment. |
+| The gate as composition firewall ([ADR-0008](adr/0008-agent-economy-trust-callchain-billing.md)) | Peer facts face the same value-match as EDGAR facts — buy from anyone, ship only what verifies. |
+| Trust = gate pass-rate, not reviews ([ADR-0008](adr/0008-agent-economy-trust-callchain-billing.md)) | Reputation computed from outcomes jim observed itself; refuses to keep paying unverifiable peers. |
+| Call-chain refusal before the paywall ([ADR-0008](adr/0008-agent-economy-trust-callchain-billing.md)) | Payment loops and runaway depth are graph properties; refuse at 409 before money moves. |
 
 ---
 
@@ -654,3 +680,59 @@ the facilitator minimum, the Graph buy leg, and — if `MAINNET_RPC_URL` is set 
 on-chain ETH/USDC balances. It **never moves money**. The buy leg has been
 mainnet-capable since Phase 2 (`GRAPH_LIVE`), so this is the sell-leg cutover plus
 guardrails; the two legs stay independent (§8).
+
+---
+
+## 16. The agent economy (Phase 7) + billing invariant
+
+Full rationale in [ADR-0008](adr/0008-agent-economy-trust-callchain-billing.md)
+and [AGENT_INTEROP.md](AGENT_INTEROP.md); the shape:
+
+### 16.1 Source-as-agent ([sources/peer.py](../src/jim/sources/peer.py))
+
+`PeerSource` is a `Source` (§5) whose upstream is *another agent*: it buys a
+facts payload (bare `facts` list or a jim-shaped `citations` list) over x402,
+through the **same** `procure()` → budget → cache path as The Graph — so the
+per-query ceiling, the dynamic-price cap (ADR-0007), and buy-once-resell-many
+economics all apply unchanged. `CompositeSource` merges peer facts into the
+primary product snapshot with renumbered citations and per-fact `origins`; a
+failing peer degrades to a sourcing note in the response's cost block, never a
+failed run. Peers are configuration (`PEER_SOURCES`), not code. The **sourcing
+gate (§7) is the composition firewall**: a peer figure that doesn't match its
+cited fact fails exactly like a self-hallucination, so composition never
+launders an unverifiable claim into a memo.
+
+### 16.2 Trust ([interop/trust.py](../src/jim/interop/trust.py), store `source_trust_events`)
+
+After every gated run the engine attributes the verdict to the sources whose
+facts it used: a pass credits all contributors; a failure debits only sources
+whose facts appear in a violation's citations. Events append to the trust
+ledger; the score is the Laplace-smoothed pass-rate ((ok+1)/(ok+fail+2) — a new
+source starts at 0.5). The buy path refuses peers below `PEER_TRUST_FLOOR`
+(after `PEER_TRUST_MIN_EVENTS`), and `/dashboard` surfaces the table. This is
+jim's native reputation primitive: verification, not reviews.
+
+### 16.3 Call-chain safety ([interop/callchain.py](../src/jim/interop/callchain.py))
+
+Every buy stamps `X-Jim-Call-Chain` (the paying agents so far + jim). The
+seller's **outermost** middleware refuses — 409, before the paywall verifies
+anything — a chain that already contains jim's address (a payment loop) or one
+at `CALL_CHAIN_MAX_DEPTH`; the buyer refuses to *extend* a chain past the same
+ceiling. Deterministic, cooperative, and bounded to what jim controls: its own
+spend and its own participation in cycles.
+
+### 16.4 The billing invariant ([seller/app.py](../src/jim/seller/app.py) `_deliver_or_refuse`)
+
+The x402 middleware settles only 2xx responses. A run the gates rejected is
+therefore *refused*: HTTP 502 with structured diagnostics (the verified payment
+is cancelled — the buyer keeps their money), the MCP tool raises, the UI
+preview declines to render, and the engine books \$0 revenue so the margin
+ledger shows the loss. "Paid but rejected" — our first mainnet settlement — is
+no longer a reachable state.
+
+### 16.5 The agent card ([marketplace/agentcard.py](../src/jim/marketplace/agentcard.py))
+
+`GET /.well-known/agent-card.json` publishes an A2A-style card — skills derived
+from the same catalog as everything else (§15.1), an x402 payment binding, and
+jim's trust/call-chain contract — linked from the `/.well-known/x402` manifest.
+MCP exposes *tools*; the card is what lets a peer *delegate a task*.

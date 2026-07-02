@@ -28,6 +28,7 @@ from jim.research.facts import Snapshot
 from jim.research.gate import GateResult, check_sourcing
 from jim.research.judge import JudgeResult, judge_faithfulness
 from jim.interop.trust import attribute_gate_outcome
+from jim.research.identifiers import canonicalize
 from jim.research.products import get_product
 from jim.research.edgar import EdgarError
 from jim.research.synthesize import synthesize
@@ -253,6 +254,14 @@ async def run_research(
         high_stakes: upgrade the faithfulness judge to the stronger model.
         use_memo_cache: override the memo cache (eval A/B disables it). None = config.
     """
+    # Canonicalize before anything else: a hostile identifier is refused here,
+    # before it can reach a source fetch, a store key, or the graph at all.
+    try:
+        identifier = canonicalize(identifier, product)
+    except ValueError as e:
+        return ResearchResult(
+            ticker=identifier[:40], mode=mode, status="error", product=product, error=str(e)
+        )
     settings = get_settings()
     debate_on = settings.enable_debate if enable_debate is None else enable_debate
     memo_cache_on = settings.memo_cache_enabled if use_memo_cache is None else use_memo_cache
