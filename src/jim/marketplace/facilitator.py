@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 
 from x402.http import FacilitatorConfig, HTTPFacilitatorClient
+from x402.schemas import SupportedKind, SupportedResponse
 
 from jim.config import Settings
 
@@ -33,7 +34,19 @@ class LoggingFacilitatorClient(HTTPFacilitatorClient):
     (bad CDP auth, insufficient balance, wrong network, etc). This subclass
     logs the raw exception server-side first, then re-raises unchanged so the
     client-facing behavior is identical.
+
+    ``get_supported`` additionally *degrades instead of raising*: it only
+    feeds ``x402ResourceServer.initialize()``'s scheme routing table, so if the
+    facilitator's ``/supported`` endpoint is unreachable (offline tests, an
+    upstream outage, an API move) we fall back to advertising EXACT-EVM on our
+    own configured network. Issuing the 402 challenge never depends on a live
+    facilitator; a truly dead facilitator still fails loudly at verify/settle,
+    where money would move.
     """
+
+    def __init__(self, config: FacilitatorConfig, fallback_network: str) -> None:
+        super().__init__(config)
+        self._fallback_network = fallback_network
 
     async def verify(self, payload, requirements):
         try:
@@ -53,9 +66,16 @@ class LoggingFacilitatorClient(HTTPFacilitatorClient):
         try:
             return super().get_supported()
         except Exception:
-            logger.exception("facilitator get_supported() failed")
-            raise
+            logger.exception(
+                "facilitator get_supported() failed; degrading to exact-EVM on %s",
+                self._fallback_network,
+            )
+            return SupportedResponse(
+                kinds=[
+                    SupportedKind(x402_version=2, scheme="exact", network=self._fallback_network)
+                ]
+            )
 
 
 def build_facilitator_client(s: Settings) -> LoggingFacilitatorClient:
-    return LoggingFacilitatorClient(build_facilitator_config(s))
+    return LoggingFacilitatorClient(build_facilitator_config(s), fallback_network=s.network)

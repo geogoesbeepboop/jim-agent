@@ -294,7 +294,10 @@ async def run_research(
         cache_hit = bool(final.get("cache_hit", False))
         served_from_cache = bool(final.get("served_from_cache", False))
         inference_cost = round(ledger.inference_cost_usd, 6)
-        margin = round(spec.price_out_usd - cost_in_data - inference_cost, 6)
+        # Rejected/errored runs are refused (never settled), so they earn $0 —
+        # the margin ledger must show the loss, not phantom revenue.
+        price_out = spec.price_out_usd if status == "ok" else 0.0
+        margin = round(price_out - cost_in_data - inference_cost, 6)
 
         # Completeness: what material facts did the memo leave out? (signal, not gate)
         memo = final.get("memo")
@@ -309,7 +312,7 @@ async def run_research(
             "output_tokens": ledger.output_tokens,
             "inference_cost_usd": inference_cost,
             "data_cost_usd": round(cost_in_data, 6),
-            "price_out_usd": spec.price_out_usd,
+            "price_out_usd": price_out,
             "margin_usd": margin,
             "cache_hit": cache_hit,
             "served_from_cache": served_from_cache,
@@ -339,14 +342,15 @@ async def run_research(
             },
         )
 
-    # Persist economics + insight (billable runs only contribute to margin).
+    # Persist economics + insight. Rejected runs record their true cost at $0
+    # revenue (they are refused before settlement — see _deliver_or_refuse).
     if status in ("ok", "rejected"):
         await store.record_query(
             product=product,
             identifier=identifier.upper(),
             mode=mode,
             status=status,
-            price_out_usd=spec.price_out_usd,
+            price_out_usd=price_out,
             cost_in_data_usd=cost_in_data,
             cost_inference_usd=inference_cost,
             cache_hit=cache_hit,

@@ -47,10 +47,48 @@ from jim.marketplace.ui import storefront_html
 from jim.monitors.create import create_monitor
 from jim.monitors.engine import run_monitor_once
 from jim.monitors.models import Monitor
-from jim.research.engine import run_research
+from jim.research.engine import ResearchResult, run_research
 from jim.research.schemas import FundamentalsResponse, ResearchResponse
 from jim.store import get_store
 from jim.vendor import build_mock_response
+
+
+def _deliver_or_refuse(result: ResearchResult, response_model):
+    """Ship verified research, or refuse with a non-2xx so the buyer is never billed.
+
+    The x402 payment middleware only settles 2xx responses — a verified payment
+    on an error response is *cancelled*, not captured. So refusing here is what
+    enforces the billing invariant end-to-end: a run the sourcing gate (or the
+    faithfulness judge) rejected returns diagnostics with HTTP 502 and the
+    buyer keeps their money. 422 stays the "your input was wrong" lane.
+    """
+    if result.status == "error":
+        raise HTTPException(status_code=422, detail=result.error)
+    if result.status != "ok":
+        gate = result.gate
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "status": result.status,
+                "billed": False,
+                "message": (
+                    "jim's verification gates rejected this run, so nothing shipped and "
+                    "your payment was not settled. This is a quality refusal, not an "
+                    "input error — a fresh attempt may succeed."
+                ),
+                "sourcing": (
+                    {
+                        "passed": gate.passed,
+                        "figures_checked": gate.n_figures,
+                        "figures_covered": gate.n_covered,
+                    }
+                    if gate is not None
+                    else None
+                ),
+                "attempts": result.attempts,
+            },
+        )
+    return response_model.from_result(result)
 
 
 class PingResponse(BaseModel):
@@ -190,17 +228,14 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         ticker: str = Query(..., description="Stock ticker, e.g. AAPL"),
         mode: str = Query("human", pattern="^(human|agent)$"),
     ) -> FundamentalsResponse:
-        """Paid. Returns a cited fundamentals memo; reaching here means settled.
+        """Paid. Returns a cited fundamentals memo — and only ships when the
+        sourcing gate passed 100% of figures against EDGAR citations.
 
-        The sourcing gate runs *before* the customer is charged a second time:
-        the payment buys a run, and we only return ``status="ok"`` when 100% of
-        figures resolved to an EDGAR citation. A gate-rejected run still returns
-        the diagnostics (impersonal, no fabricated numbers).
+        A gate-rejected run refuses with 502 + diagnostics, which cancels the
+        verified payment: **the buyer is never billed for rejected research.**
         """
         result = await run_research(ticker, product="fundamentals", mode=mode)
-        if result.status == "error":
-            raise HTTPException(status_code=422, detail=result.error)
-        return FundamentalsResponse.from_result(result)
+        return _deliver_or_refuse(result, FundamentalsResponse)
 
     @app.get("/research/token", response_model=ResearchResponse)
     async def token(
@@ -214,9 +249,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         data. Margin = price_out − data_cost − inference_cost (see /dashboard).
         """
         result = await run_research(token, product="token", mode=mode)
-        if result.status == "error":
-            raise HTTPException(status_code=422, detail=result.error)
-        return ResearchResponse.from_result(result)
+        return _deliver_or_refuse(result, ResearchResponse)
 
     @app.get("/research/macro", response_model=ResearchResponse)
     async def macro(
@@ -229,9 +262,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         like fundamentals — no buy leg. Reaching here means settlement succeeded.
         """
         result = await run_research(region, product="macro", mode=mode)
-        if result.status == "error":
-            raise HTTPException(status_code=422, detail=result.error)
-        return ResearchResponse.from_result(result)
+        return _deliver_or_refuse(result, ResearchResponse)
 
     @app.post("/mock-graph/subgraphs/id/{subgraph_id}")
     async def mock_graph(subgraph_id: str, request: Request) -> dict:

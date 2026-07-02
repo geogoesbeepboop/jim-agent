@@ -36,6 +36,8 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
     "ruff>=0.6.0",
+    # Track 0 — property-based fuzzing of the sourcing gate (tests/test_gate_fuzz.py).
+    "hypothesis>=6.100",
 ]
 # Optional factuality observability. The deterministic sourcing gate (jim.research.gate)
 # is always-on and needs none of this; these add LLM-judge scoring + tracing.
