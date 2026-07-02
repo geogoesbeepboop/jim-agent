@@ -27,6 +27,7 @@ from x402.mechanisms.evm import EthAccountSigner
 from x402.mechanisms.evm.exact.register import register_exact_evm_client
 
 from jim.config import get_settings
+from jim.interop.callchain import outbound_payment_headers
 
 # USDC and most x402 stablecoins use 6 decimals.
 _USDC_DECIMALS = 6
@@ -129,6 +130,16 @@ async def pay(
         raise ValueError(
             "No EVM_PRIVATE_KEY available. Run `uv run jim-wallet new` and set it in .env."
         )
+
+    # Cross-agent spend safety (Phase 7): every buy carries the call chain with
+    # our identity appended, so an honest peer can refuse loops, and we refuse
+    # to extend past the depth ceiling (raises CallChainDepthExceeded) before
+    # any money moves.
+    own_identity = settings.evm_address or Account.from_key(key).address
+    headers = {
+        **outbound_payment_headers(own_identity, settings.call_chain_max_depth),
+        **(headers or {}),
+    }
 
     client = _build_client(key)
     http_client = x402HTTPClient(client)

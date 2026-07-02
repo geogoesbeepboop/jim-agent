@@ -96,6 +96,9 @@ class Store(Protocol):
     async def put_cached_memo(
         self, *, key: str, fingerprint: str, memo: str, debate: str | None
     ) -> None: ...
+    # --- Phase 7: per-source trust (the gate pass-rate as reputation) ---
+    async def record_trust_event(self, *, source: str, ok: bool, context: str) -> None: ...
+    async def trust_scores(self) -> dict[str, dict]: ...
     # --- Phase 4: monitors ---
     async def save_monitor(self, row: dict) -> None: ...
     async def get_monitor(self, monitor_id: str) -> dict | None: ...
@@ -121,6 +124,7 @@ class MemoryStore:
     monitor_runs: list[dict] = field(default_factory=list)
     receipts: list[dict] = field(default_factory=list)
     memos: dict[str, dict] = field(default_factory=dict)
+    trust_events: list[dict] = field(default_factory=list)
 
     async def get_cached_purchase(self, source, key):
         row = self.purchases.get((source, key))
@@ -252,6 +256,15 @@ class MemoryStore:
             "debate": debate,
             "created_at": _utcnow(),
         }
+
+    # --- Phase 7: per-source trust ---
+    async def record_trust_event(self, *, source, ok, context):
+        self.trust_events.append(
+            {"source": source, "ok": bool(ok), "context": context, "created_at": _utcnow()}
+        )
+
+    async def trust_scores(self):
+        return _summarize_trust(self.trust_events)
 
     # --- Phase 4: monitors ---
     async def save_monitor(self, row):
@@ -532,6 +545,27 @@ class SqlStore:
                 )
             await s.commit()
 
+    # --- Phase 7: per-source trust ---
+    async def record_trust_event(self, *, source, ok, context):
+        from jim.store.models import SourceTrustEvent
+
+        async with self._sm() as s:
+            s.add(SourceTrustEvent(source=source, ok=bool(ok), context=context))
+            await s.commit()
+
+    async def trust_scores(self):
+        from sqlalchemy import select
+        from jim.store.models import SourceTrustEvent
+
+        async with self._sm() as s:
+            rows = (await s.execute(select(SourceTrustEvent))).scalars().all()
+            return _summarize_trust(
+                [
+                    {"source": r.source, "ok": r.ok, "created_at": r.created_at}
+                    for r in rows
+                ]
+            )
+
     # --- Phase 4: monitors ---
     async def save_monitor(self, row):
         from jim.store.models import MonitorRow
@@ -789,6 +823,29 @@ def _summarize_monitor_runs(runs: list[dict]) -> dict:
         "total_margin_usd": round(margin, 6),
         "inference_saved_usd": round(len(quiet) * avg_inf_per_update, 6),
     }
+
+
+def _summarize_trust(events: list[dict]) -> dict[str, dict]:
+    """Per-source trust rollup: gate pass/fail counts + Laplace-smoothed score.
+
+    The score IS the routing signal (jim.interop.trust): a peer below the trust
+    floor is refused on the buy path; the dashboard surfaces the same numbers.
+    """
+    from jim.interop.trust import laplace_score
+
+    by_source: dict[str, dict] = {}
+    for e in events:
+        row = by_source.setdefault(
+            e["source"], {"source": e["source"], "ok": 0, "fail": 0, "last_event_at": None}
+        )
+        row["ok" if e.get("ok") else "fail"] += 1
+        ts = e.get("created_at")
+        ts = ts.isoformat() if hasattr(ts, "isoformat") else ts
+        if ts and (row["last_event_at"] is None or ts > row["last_event_at"]):
+            row["last_event_at"] = ts
+    for row in by_source.values():
+        row["score"] = round(laplace_score(row["ok"], row["fail"]), 4)
+    return by_source
 
 
 def _summarize(queries: list[dict]) -> dict:

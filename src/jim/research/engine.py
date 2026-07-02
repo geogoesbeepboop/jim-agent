@@ -27,6 +27,7 @@ from jim.research.debate import run_debate
 from jim.research.facts import Snapshot
 from jim.research.gate import GateResult, check_sourcing
 from jim.research.judge import JudgeResult, judge_faithfulness
+from jim.interop.trust import attribute_gate_outcome
 from jim.research.products import get_product
 from jim.research.edgar import EdgarError
 from jim.research.synthesize import synthesize
@@ -62,6 +63,7 @@ class EngineState(TypedDict, total=False):
     memo_cache_ttl: int
     high_stakes: bool
     served_from_cache: bool
+    sourcing_notes: list[str]
 
 
 @dataclass
@@ -106,6 +108,7 @@ async def _gather(state: EngineState) -> dict:
         "snapshot": result.snapshot,
         "cost_in_data": result.cost_in_usd,
         "cache_hit": result.cache_hit,
+        "sourcing_notes": list(result.notes),
     }
 
 
@@ -317,6 +320,8 @@ async def run_research(
             "cache_hit": cache_hit,
             "served_from_cache": served_from_cache,
         }
+        if final.get("sourcing_notes"):
+            cost["sourcing_notes"] = list(final["sourcing_notes"])
         if completeness is not None:
             cost["completeness"] = round(completeness.coverage, 4)
             cost["material_coverage"] = round(completeness.material_coverage, 4)
@@ -341,6 +346,19 @@ async def run_research(
                 "served_from_cache": served_from_cache,
             },
         )
+
+    # Trust ledger (Phase 7): attribute this run's gate outcome to the sources
+    # whose facts it used — the pass-rate is each source's reputation. Cached
+    # runs are skipped (their outcome was already attributed when synthesized).
+    if snapshot is not None and gate is not None and not served_from_cache:
+        verdicts = attribute_gate_outcome(snapshot, gate, default_source=spec.source.name)
+        for src, passed_flag in verdicts.items():
+            try:
+                await store.record_trust_event(
+                    source=src, ok=passed_flag, context=f"{product}:{identifier.upper()}"
+                )
+            except Exception:
+                pass  # trust is a signal, never a reason to fail a run
 
     # Persist economics + insight. Rejected runs record their true cost at $0
     # revenue (they are refused before settlement — see _deliver_or_refuse).

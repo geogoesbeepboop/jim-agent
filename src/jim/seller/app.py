@@ -34,6 +34,7 @@ from jim.marketplace.facilitator import build_facilitator_client
 from jim.admin import admin_dashboard
 from jim.config import Settings, get_settings
 from jim.dashboard import margin_dashboard
+from jim.interop.callchain import CallChainMiddleware
 from jim.seller.audit import PaymentAuditMiddleware
 from jim.marketplace.catalog import build_catalog, listing_for
 from jim.marketplace.discovery import discovery_manifest
@@ -192,6 +193,12 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             mime_type="application/json",
             description="Mock 'The Graph' vendor (testnet stand-in). Uniswap-v3 shape.",
         ),
+        # The testnet mock PEER vendor: a paid peer agent jim subcontracts (Phase 7).
+        "GET /mock-peer/research": RouteConfig(
+            accepts=_pay(settings.mock_peer_price),
+            mime_type="application/json",
+            description="Mock peer agent (testnet stand-in). Sentiment-signal facts payload.",
+        ),
     }
 
     # A browser that hits a paid route unpaid gets x402's bundled wallet paywall
@@ -207,11 +214,18 @@ def build_app(settings: Settings | None = None) -> FastAPI:
 
     # Middleware order matters: the LAST `add_middleware` is the OUTERMOST. The
     # audit layer must wrap the payment layer so it can read the PAYMENT-RESPONSE
-    # settlement header the payment layer writes *after* the handler returns.
+    # settlement header the payment layer writes *after* the handler returns; the
+    # call-chain layer must wrap EVERYTHING so a payment loop / over-depth chain
+    # is refused (409) before the paywall ever verifies a payment.
     app.add_middleware(
         PaymentMiddlewareASGI, routes=routes, server=server, paywall_provider=paywall_provider
     )
     app.add_middleware(PaymentAuditMiddleware)
+    app.add_middleware(
+        CallChainMiddleware,
+        own_address=settings.evm_address,
+        max_depth=settings.call_chain_max_depth,
+    )
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -269,6 +283,15 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         """Paid testnet vendor: returns Uniswap-v3-shaped data for a token query."""
         body = await request.json()
         return build_mock_response(body.get("query", ""))
+
+    @app.get("/mock-peer/research")
+    async def mock_peer(
+        identifier: str = Query(..., description="Ticker/token the peer analyzes"),
+    ) -> dict:
+        """Paid testnet peer agent: sentiment-shaped facts in the peer wire format."""
+        from jim.vendor.mock_peer import build_mock_peer_response
+
+        return build_mock_peer_response(identifier)
 
     @app.get("/dashboard")
     async def dashboard() -> dict:

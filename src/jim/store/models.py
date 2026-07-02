@@ -151,6 +151,26 @@ class MonitorRow(Base):
     )
 
 
+class SourceTrustEvent(Base):
+    """One gate-outcome attribution for one source (Phase 7 trust ledger).
+
+    Append-only: every gated run credits (``ok=True``) or debits (``ok=False``)
+    the sources whose facts it used, per the deterministic attribution rule in
+    ``jim.interop.trust``. A source's trust score is the Laplace-smoothed
+    pass-rate over its events — reputation by verification, auditable row by
+    row like every other ledger in jim."""
+
+    __tablename__ = "source_trust_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(96), index=True)  # "fundamentals", "peer:x", ...
+    ok: Mapped[bool] = mapped_column(Boolean, index=True)
+    context: Mapped[str] = mapped_column(String(160))  # "fundamentals:AAPL", ...
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, index=True
+    )
+
+
 class MonitorRunRow(Base):
     """One monitor execution (Phase 4). Economics columns feed the monitor stats;
     the full run (signals + memo) lives in ``data`` (MonitorRun.to_row())."""
