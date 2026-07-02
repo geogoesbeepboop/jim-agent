@@ -22,12 +22,14 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
-from x402.http import FacilitatorConfig, HTTPFacilitatorClient, PaymentOption
+from x402.http import HTTPFacilitatorClient, PaymentOption
 from x402.http.middleware.fastapi import PaymentMiddlewareASGI
 from x402.http.paywall import create_paywall, evm_paywall
 from x402.http.types import RouteConfig
 from x402.mechanisms.evm.exact import ExactEvmServerScheme
 from x402.server import x402ResourceServer
+
+from jim.marketplace.facilitator import build_facilitator_config
 
 from jim.admin import admin_dashboard
 from jim.config import Settings, get_settings
@@ -104,7 +106,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
 
     # Wire the resource server to a facilitator and register the EXACT-EVM scheme
     # for our network. The facilitator does the on-chain verify + settle.
-    facilitator = HTTPFacilitatorClient(FacilitatorConfig(url=settings.facilitator_url))
+    facilitator = HTTPFacilitatorClient(build_facilitator_config(settings))
     server = x402ResourceServer(facilitator)
     server.register(settings.network, ExactEvmServerScheme())
 
