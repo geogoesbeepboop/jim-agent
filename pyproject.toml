@@ -27,6 +27,8 @@ dependencies = [
     "greenlet>=3.0",
     # Phase 5 — Bazaar discovery extension validation (what x402[extensions] needs).
     "jsonschema>=4.26.0",
+    # Phase 5 — Coinbase CDP mainnet facilitator auth (jim.marketplace.facilitator).
+    "cdp-sdk>=1.40.0",
 ]
 
 [project.optional-dependencies]

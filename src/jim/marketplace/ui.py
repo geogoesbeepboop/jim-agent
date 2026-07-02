@@ -80,7 +80,15 @@ async def _checkout_via_x402(
     url = f"{settings.public_url}{path}?{param}={identifier}&mode={mode}"
     resp = await pay(url, method="GET")
     if resp.status_code != 200:
-        return {"ok": False, "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+        # The seller's 402 body is empty on a failed settlement; the real reason
+        # (insufficient funds, facilitator auth, etc.) rides in the PAYMENT-RESPONSE
+        # header instead, which `pay()` already decoded into `resp.settlement`.
+        detail = ""
+        if resp.settlement:
+            reason = resp.settlement.get("error_reason")
+            message = resp.settlement.get("error_message")
+            detail = f" — {reason}: {message}" if reason or message else ""
+        return {"ok": False, "error": f"HTTP {resp.status_code}{detail or f': {resp.text[:200]}'}"}
     return {
         "ok": True,
         "paid": resp.paid,

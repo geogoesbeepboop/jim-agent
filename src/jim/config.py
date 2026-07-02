@@ -34,6 +34,11 @@ class Settings(BaseSettings):
         default="https://x402.org/facilitator",
         description="x402 facilitator that verifies + settles payments",
     )
+    # Coinbase CDP mainnet facilitator auth. When both are set, the facilitator
+    # client authenticates with CDP (and its URL overrides FACILITATOR_URL —
+    # see jim.marketplace.facilitator.build_facilitator_config).
+    cdp_api_key_id: str | None = Field(default=None, description="CDP API key ID")
+    cdp_api_key_secret: str | None = Field(default=None, description="CDP API key secret")
 
     # --- Seller side --------------------------------------------------------
     # The address that receives payments for our paywalled endpoints.
