@@ -67,14 +67,13 @@ def _import_mcp():
 def _build_resource_server(settings):
     """A facilitator-backed resource server with the EXACT-EVM scheme — same as
     the HTTP seller, so MCP and HTTP settle identically."""
-    from x402.http import HTTPFacilitatorClient
     from x402.http.types import PaymentOption
     from x402.mechanisms.evm.exact import ExactEvmServerScheme
     from x402.server import x402ResourceServer
 
-    from jim.marketplace.facilitator import build_facilitator_config
+    from jim.marketplace.facilitator import build_facilitator_client
 
-    facilitator = HTTPFacilitatorClient(build_facilitator_config(settings))
+    facilitator = build_facilitator_client(settings)
     server = x402ResourceServer(facilitator)
     server.register(settings.network, ExactEvmServerScheme())
     server.initialize()  # fetch supported kinds from the facilitator
