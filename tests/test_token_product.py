@@ -31,7 +31,8 @@ def _reset():
 
 
 async def _fake_buy(
-    url, *, method="GET", json_body=None, headers=None, private_key=None, timeout=180.0
+    url, *, method="GET", json_body=None, headers=None, private_key=None, timeout=180.0,
+    max_price_usd=None,
 ):
     payload = build_mock_response((json_body or {}).get("query", ""))
     return PaidResponse(
@@ -54,7 +55,7 @@ async def _fake_synth(snapshot, *, mode="human", feedback=None, debate=None) -> 
 async def test_token_product_end_to_end(monkeypatch):
     monkeypatch.setattr(engine, "synthesize", _fake_synth)
 
-    async def fake_judge(memo, snapshot):
+    async def fake_judge(memo, snapshot, **_):
         return JudgeResult.skip()
 
     async def fake_debate(snapshot):
@@ -92,7 +93,7 @@ async def test_token_product_end_to_end(monkeypatch):
 async def test_token_second_call_hits_cache_and_improves_margin(monkeypatch):
     monkeypatch.setattr(engine, "synthesize", _fake_synth)
 
-    async def fake_judge(memo, snapshot):
+    async def fake_judge(memo, snapshot, **_):
         return JudgeResult.skip()
 
     async def fake_debate(snapshot):

@@ -20,8 +20,21 @@ from jim.research.engine import run_research
 from jim.research.schemas import ResearchResponse
 
 
-async def _run(identifier: str, product: str, mode: str, as_json: bool) -> int:
-    result = await run_research(identifier, product=product, mode=mode)
+async def _run(
+    identifier: str,
+    product: str,
+    mode: str,
+    as_json: bool,
+    high_stakes: bool = False,
+    use_memo_cache: bool | None = None,
+) -> int:
+    result = await run_research(
+        identifier,
+        product=product,
+        mode=mode,
+        high_stakes=high_stakes,
+        use_memo_cache=use_memo_cache,
+    )
 
     if as_json:
         print(ResearchResponse.from_result(result).model_dump_json(indent=2))
@@ -54,18 +67,35 @@ async def _run(identifier: str, product: str, mode: str, as_json: bool) -> int:
         for v in g.violations:
             print(f"  ✗ {v.reason}: {v.figure!r}")
     if result.judge and not result.judge.skipped:
+        model = f" [{result.judge.model}]" if result.judge.model else ""
         print(
-            f"Faithfulness: {result.judge.score:.2f}  {'PASS' if result.judge.passed else 'FAIL'}"
+            f"Faithfulness: {result.judge.score:.2f}  "
+            f"{'PASS' if result.judge.passed else 'FAIL'}{model}"
         )
+        for c in result.judge.unsupported_claims:
+            print(f"  ✗ unsupported: {c.claim!r} — {c.reason}")
         for issue in result.judge.issues:
             print(f"  · {issue}")
 
+    if result.completeness:
+        comp = result.completeness
+        print(
+            f"Completeness: {comp.material_coverage:.0%} of material facts cited "
+            f"({comp.coverage:.0%} of all facts)"
+        )
+        for o in comp.material_omissions:
+            print(f"  ⚠ omitted material: {o['label']}")
+
     c = result.cost
+    cache_note = ""
+    if result.served_from_cache:
+        cache_note = "  (memo cache — $0 inference)"
+    elif c.get("cache_hit"):
+        cache_note = "  (data cache hit)"
     print(
         f"\nEconomics: price_out ${c.get('price_out_usd', 0):.4f}  −  "
         f"data ${c.get('data_cost_usd', 0):.4f}  −  inference ${c.get('inference_cost_usd', 0):.5f}  "
-        f"=  margin ${c.get('margin_usd', 0):.4f}"
-        f"{'  (cache hit)' if c.get('cache_hit') else ''}"
+        f"=  margin ${c.get('margin_usd', 0):.4f}{cache_note}"
     )
     print("\nCitations:")
     for line in result.citations():
@@ -79,8 +109,27 @@ def main() -> int:
     parser.add_argument("--product", choices=["fundamentals", "token"], default="fundamentals")
     parser.add_argument("--mode", choices=["human", "agent"], default="human")
     parser.add_argument("--json", action="store_true", help="Emit the full JSON response")
+    parser.add_argument(
+        "--high-stakes",
+        action="store_true",
+        help="Upgrade the faithfulness judge to the stronger (Sonnet) model",
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Bypass the memo cache (always re-synthesize)",
+    )
     args = parser.parse_args()
-    return asyncio.run(_run(args.identifier, args.product, args.mode, args.json))
+    return asyncio.run(
+        _run(
+            args.identifier,
+            args.product,
+            args.mode,
+            args.json,
+            high_stakes=args.high_stakes,
+            use_memo_cache=(False if args.no_cache else None),
+        )
+    )
 
 
 if __name__ == "__main__":

@@ -21,3 +21,8 @@ import os
 # developer's .env. Empty DATABASE_URL is falsy → get_store() picks MemoryStore.
 os.environ["DATABASE_URL"] = ""
 os.environ.pop("ANTHROPIC_API_KEY", None)
+# Empty (not popped) — pydantic-settings prefers a real os.environ value over
+# .env, but an *absent* key still falls through to .env's real CDP creds. An
+# empty string is a present-but-falsy override, so it actually neutralizes them.
+os.environ["CDP_API_KEY_ID"] = ""
+os.environ["CDP_API_KEY_SECRET"] = ""

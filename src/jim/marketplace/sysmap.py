@@ -117,23 +117,28 @@ def system_graph(settings: Settings | None = None) -> SystemGraph:
 
     # --- Engine nodes ---
     g.add(Node("gather", "gather", "engine", "engine"))
+    if s.memo_cache_enabled:
+        g.add(Node("memo_cache", "memo cache<br/>(identical → $0 inference)", "engine", "engine"))
     if s.enable_debate:
         g.add(Node("debate", "debate<br/>(bull ∥ bear → judge)", "engine", "engine"))
     g.add(Node("synthesize", "synthesize<br/>(LLM memo)", "engine", "engine"))
-    g.add(Node("judge", "faithfulness judge", "engine", "engine"))
+    g.add(Node("judge", "faithfulness judge<br/>(per-claim · Sonnet tier)", "engine", "engine"))
 
     # --- Trust gates ---
     g.add(Node("gate", "sourcing gate<br/>(no LLM)", "trust", "gate"))
+    g.add(Node("completeness", "completeness<br/>(omission signal)", "trust", "gate"))
     g.add(Node("impersonal", "impersonal guard", "trust", "gate"))
     g.add(Node("budget", "budget cap<br/>(propose/dispose)", "trust", "gate"))
 
     # --- Sources ---
     g.add(Node("fundamentals_src", "FundamentalsSource<br/>(free)", "sources", "source"))
     graph_badge = "PAID · live" if s.graph_live else "PAID · mock"
-    g.add(Node("graph_src", f"GraphSource<br/>({graph_badge})", "sources", "source"))
+    g.add(Node("graph_src", f"GraphSource<br/>({graph_badge} · multi-chain)", "sources", "source"))
+    g.add(Node("macro_src", "MacroSource<br/>(free · public-domain)", "sources", "source"))
 
     # --- External tools ---
     g.add(Node("edgar", "SEC EDGAR<br/>(public domain)", "external", "external"))
+    g.add(Node("govdata", "US gov data<br/>Fed · BLS · Treasury", "external", "external"))
     if s.enable_prices:
         g.add(Node("yahoo", "Yahoo charts<br/>(price/technicals)", "external", "external"))
     if s.graph_live:
@@ -184,18 +189,26 @@ def system_graph(settings: Settings | None = None) -> SystemGraph:
         g.link(f"route_{listing.product}", "gather", "run_research")
 
     # Engine flow.
+    head = "memo_cache" if s.memo_cache_enabled else None
+    if head:
+        g.link("gather", "memo_cache", "fingerprint")
+        g.link("memo_cache", "judge", "hit → serve ($0)")
+    nxt = head or "gather"
     if s.enable_debate:
-        g.link("gather", "debate")
+        g.link(nxt, "debate", "miss" if head else "")
         g.link("debate", "synthesize")
     else:
-        g.link("gather", "synthesize")
+        g.link(nxt, "synthesize", "miss" if head else "")
     g.link("synthesize", "gate", "verify figures")
     g.link("gate", "synthesize", "fail → retry")
     g.link("gate", "judge", "pass")
+    g.link("judge", "completeness", "omission check")
 
     # Gather → sources → externals.
     g.link("gather", "fundamentals_src")
     g.link("gather", "graph_src")
+    g.link("gather", "macro_src")
+    g.link("macro_src", "govdata", "public domain")
     g.link("fundamentals_src", "edgar")
     if s.enable_prices:
         g.link("fundamentals_src", "yahoo")

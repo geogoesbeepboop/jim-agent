@@ -168,7 +168,8 @@ class Source(Protocol):
 | Source | Upstream | Paid? | Citation anchor |
 |---|---|---|---|
 | `FundamentalsSource` | SEC EDGAR + Yahoo | free | filing accession / price observation |
-| `GraphSource` | The Graph (Uniswap v3) | **x402** | subgraph query |
+| `GraphSource` | The Graph (Uniswap v3, **multi-chain**) | **x402** | subgraph query (chain-qualified) |
+| `MacroSource` | US gov (Fed / BLS / Treasury) | free | gov release date |
 | `EdgarSource` | SEC EDGAR only | free | filing accession |
 
 ### 5.1 EDGAR ([edgar.py](../src/jim/research/edgar.py))
@@ -206,6 +207,29 @@ The mock ([vendor/mock_graph.py](../src/jim/vendor/mock_graph.py)) returns the
 only settles on mainnet — there is no testnet endpoint, confirmed by probing —
 which is why the mock exists for verification.)
 
+**Multi-chain (ADR-0007).** All Uniswap-v3 deployments share one schema, so a
+`ChainSpec` registry (Ethereum, Base, Arbitrum, Polygon) reuses one query + one
+parser — only the subgraph id, the per-chain token map, and the citation label
+change. The identifier carries the chain: `WETH`, `WETH:base`, `0x…:arbitrum`
+(default Ethereum). The cache key is chain-qualified so cross-chain data never
+collides, and settlement is unchanged (x402 on Base). On-chain data is public and
+The Graph charges a service fee (not a data license), so derived insight is freely
+redistributable. Aerodrome-on-Base (a Solidly fork, different schema) is a registry
+entry awaiting its own parser.
+
+### 5.4 Macro ([macro.py](../src/jim/sources/macro.py))
+
+A **free, public-domain** source (product `macro`) that keeps macro context inside
+jim's invariant: Fed funds (NY Fed EFFR), CPI (BLS), 2y/10y Treasury yields (U.S.
+Treasury), and a derived 2s10s spread — each figure cited to a **US-government
+primary source**. Deliberately **not FRED**: FRED's API ToS forbids
+caching/redistribution, whereas the underlying agency data is public domain
+(17 U.S.C. §105), so jim goes straight to the agencies. Best-effort like the Yahoo
+enrichment (a down upstream drops its reading, never fails the run). Free data → a
+pure-margin product. Equity index levels (S&P 500, sector benchmarks) are
+intentionally absent — proprietary, with no public-domain path. See ADR-0007 for
+the economics and what was refused (proprietary transcripts / EPS estimates).
+
 ---
 
 ## 6. Procurement, budget, and cache (the margin engine)
@@ -218,7 +242,9 @@ A paid fetch never spends freely. The flow is:
 procure():
   cache hit?  ───────────────► return cached payload, cost_in = 0   (repackaged sale)
   budget.propose(estimate) ──► denied → raise BudgetExceeded
-  buyer.pay() over x402     ──► settle on-chain
+  buyer.pay(max_price=cap)  ──► pre-flight reads the REAL advertised 402 price;
+                                over cap → PriceCapExceeded (never settles)
+                            └─► otherwise settle on-chain
   budget.commit(actual)
   store.record_purchase()   ──► cache for next time (TTL)
 ```
@@ -226,6 +252,15 @@ procure():
 `BudgetCap` holds a **hard per-query ceiling** on data spend. The source
 *proposes* (it reasons about cost-vs-value); the budget *disposes* (code enforces
 the ceiling). This is the same split as the gate: model wants, code decides.
+
+**The dynamic-price guard (ADR-0007).** The x402 price is set by the seller in the
+402 header and is *not* pre-published. `propose()` only checks the *estimate*; the
+guard checks what the seller *actually* advertises. `procure` passes the remaining
+ceiling as `max_price_usd`, so the unpaid pre-flight refuses an over-cap price
+*before* any settlement (`PriceCapExceeded`, surfaced as `BudgetExceeded`). This is
+what keeps jim from overpaying on mainnet, where the price is real USDC.
+`scripts/graph_probe.py` is the pre-cutover audit: it decodes the live price and
+PASS/FAILs it against the same ceiling.
 
 ### 6.2 Buy client ([buyer/client.py](../src/jim/buyer/client.py))
 

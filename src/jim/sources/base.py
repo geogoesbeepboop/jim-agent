@@ -78,7 +78,21 @@ async def procure(
     if not decision.approved:
         raise BudgetExceeded(decision.reason)
 
-    resp = await buy_fn(url, method=method, json_body=json_body, private_key=private_key)
+    # The estimate is what we *expect*; the cap enforces what the seller *actually*
+    # advertises in its 402. Pass the real remaining ceiling so an over-cap price is
+    # refused before settlement — the deterministic guard against dynamic x402 pricing.
+    from jim.buyer.client import PriceCapExceeded
+
+    try:
+        resp = await buy_fn(
+            url,
+            method=method,
+            json_body=json_body,
+            private_key=private_key,
+            max_price_usd=budget.remaining_usd,
+        )
+    except PriceCapExceeded as e:
+        raise BudgetExceeded(str(e)) from e
     if resp.status_code != 200:
         raise ProcurementError(f"{source_name} returned HTTP {resp.status_code}: {resp.text[:200]}")
     try:

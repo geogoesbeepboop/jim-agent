@@ -40,12 +40,16 @@ src/jim/
     edgar.py            # SEC EDGAR client: ticker→CIK→XBRL facts (free upstream)
     facts.py            # cited data model + derived-metric computation
     gate.py             # the provable sourcing gate (deterministic, no LLM)
+    completeness.py     # the gate's mirror: flags material facts the memo omitted
     synthesize.py       # Anthropic synthesizer → cited memo (human/agent modes)
-    judge.py            # optional LLM faithfulness judge (semantic backstop)
+    judge.py            # LLM faithfulness judge: per-claim checklist + Sonnet tier
     budget.py           # per-query budget cap (propose/dispose)
     products.py         # registry: fundamentals→EDGAR, token→The Graph
-    engine.py           # LangGraph: gather → synthesize → gate(retry) → judge
-  sources/              # Source interface: EDGAR (free) + The Graph (paid x402)
+    engine.py           # LangGraph: gather → memo-cache → synthesize → gate(retry) → judge
+  eval/rubric.py        # weighted "better output" score (sourcing+completeness+…)
+  sources/              # Source interface: EDGAR + macro (free) · The Graph (paid x402)
+    thegraph.py         # multi-chain Uniswap-v3 (ETH/Base/Arbitrum/Polygon) over x402
+    macro.py            # free public-domain macro: Fed funds · CPI · Treasury yields
   monitors/             # Phase 4: scheduled diff-driven monitors (the "motley crew")
     diff.py             # deterministic snapshot diffing (baseline → fresh)
     triggers.py         # the crew: price/threshold/MA-cross/new-filing watchers
@@ -140,6 +144,35 @@ uv run jim-eval --gate-only               # offline: planted hallucinations must
 uv run jim-eval AAPL MSFT                 # live: debate vs single-pass lift (needs key)
 ```
 
+## Research quality: memo cache, completeness, judge, rubric
+
+Four upgrades to "is the answer good?" — see
+[ADR-0006](docs/adr/0006-research-quality-memo-cache-completeness-judge-rubric.md).
+
+- **Memo cache.** After `gather`, jim fingerprints the fresh snapshot; if a recent
+  memo for `{product}:{identifier}:{mode}` was written from **identical** data and
+  still passes the deterministic gate, it's served directly — synthesis/debate/judge
+  are skipped and **inference cost is $0**. Moved data (a new price) changes the
+  fingerprint and correctly re-synthesizes, so the cache only hits when nothing
+  changed. The gate re-check means a cached memo can never ship unsourced.
+- **Completeness check.** The gate's mirror image — it flags **material** snapshot
+  facts the memo *omitted* (deterministic, no key). A signal, not a gate: it lowers
+  the quality score and is surfaced, but never rejects a run.
+- **Structured judge.** The faithfulness judge returns a **per-claim checklist**
+  (each claim → supported? which citation? why), and high-stakes runs upgrade to a
+  stronger model (`JUDGE_HIGH_STAKES_MODEL`).
+- **Eval rubric.** A weighted composite over sourcing + completeness + impersonal
+  (all deterministic, no key) plus faithfulness when live — so "better output" is a
+  number, computable offline.
+
+```bash
+uv run jim-research AAPL                  # 2nd identical run → "(memo cache — $0 inference)"
+uv run jim-research AAPL --no-cache       # force a fresh synthesis
+uv run jim-research NVDA --high-stakes    # upgrade the faithfulness judge to Sonnet
+uv run jim-eval AAPL MSFT                 # report now includes material coverage + composite rubric
+```
+> New table: run `uv run jim-initdb` once to create `memo_cache`.
+
 ## Two-sided + margin (Phase 2)
 
 jim's `token` product **buys** its upstream data over x402. By default it buys
@@ -157,9 +190,10 @@ uv run jim-initdb
 uv run jim-seller
 
 # 3. Buy on-chain token research; jim pays The Graph (mock) under the hood
-uv run jim-research WETH --product token        # local run
-uv run python scripts/precompute.py             # warm WETH/WBTC/UNI into cache
-uv run python scripts/research_demo.py WETH     # full paid round-trip (optional)
+uv run jim-research WETH --product token         # Uniswap v3 · Ethereum (default)
+uv run jim-research AERO:base --product token     # multi-chain: :chain suffix (ADR-0007)
+uv run jim-research ARB:arbitrum --product token  # Base / Arbitrum / Polygon supported
+uv run python scripts/precompute.py              # warm WETH/WBTC/UNI into cache
 
 # 4. See the economics: price_out − data_cost − inference = margin
 uv run jim-dashboard                             # or: GET http://localhost:4021/dashboard
@@ -167,8 +201,28 @@ uv run jim-dashboard                             # or: GET http://localhost:4021
 
 `price_out − data_cost − inference_cost = margin`. The first buy of a token costs
 `data_cost`; the cache makes every later sale within the TTL pure margin —
-"buy a datum once, resell derived insight many times". Check the live endpoint
-price before spending with `uv run python scripts/graph_probe.py WETH`.
+"buy a datum once, resell derived insight many times". The live x402 price is
+**dynamic and unpublished**, so the buy path enforces a hard **price cap** (refuses
+above the per-query budget) and `graph_probe` audits it before a mainnet cutover:
+
+```bash
+uv run python scripts/graph_probe.py WETH         # decode the live price + PASS/FAIL vs budget
+uv run python scripts/graph_probe.py AERO:base    # chain-aware
+```
+
+### Macro context (free, public-domain)
+
+A third product, `macro`, cites **US-government primary sources** (Fed funds, CPI,
+Treasury yields + 2s10s) — public domain, redistributable, $0 data cost (pure
+margin). Deliberately not FRED (its ToS forbids redistribution); jim goes straight
+to the Fed / BLS / Treasury. Proprietary sources (earnings transcripts, forward-EPS
+estimates, index levels) were **researched and refused** — they prohibit
+redistribution and break the public-domain invariant. See
+[ADR-0007](docs/adr/0007-data-source-economics-multichain-macro.md).
+
+```bash
+uv run jim-research US --product macro            # cited Fed funds / CPI / Treasury snapshot
+```
 
 ## Monitors (Phase 4)
 
@@ -292,6 +346,13 @@ uv run pytest          # all offline, no wallet/network/API key/DB:
                        #  · payments: settlement receipt decode, audit middleware
                        #    (records buyer + tx, fails open), admin revenue/buyer
                        #    rollup, wallet paywall served to browsers not agents
+                       #  · research quality: memo cache (fingerprint hit/miss/TTL,
+                       #    engine serves 2nd identical query at $0 inference),
+                       #    completeness omissions, per-claim judge + Sonnet tier,
+                       #    weighted eval rubric (offline composite)
+                       #  · data sources: multi-chain token resolve + cache isolation,
+                       #    free macro source (cited gov data, 2s10s, degrades),
+                       #    dynamic-price cap guard (refuses over-budget x402 price)
 ```
 
 > Tests are hermetic by design (a `conftest.py` neutralises `DATABASE_URL` /

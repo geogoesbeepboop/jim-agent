@@ -22,12 +22,14 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
-from x402.http import FacilitatorConfig, HTTPFacilitatorClient, PaymentOption
+from x402.http import PaymentOption
 from x402.http.middleware.fastapi import PaymentMiddlewareASGI
 from x402.http.paywall import create_paywall, evm_paywall
 from x402.http.types import RouteConfig
 from x402.mechanisms.evm.exact import ExactEvmServerScheme
 from x402.server import x402ResourceServer
+
+from jim.marketplace.facilitator import build_facilitator_client
 
 from jim.admin import admin_dashboard
 from jim.config import Settings, get_settings
@@ -60,7 +62,7 @@ class PingResponse(BaseModel):
 class CheckoutRequest(BaseModel):
     """Body for ``POST /ui/checkout`` — the human UI's research request."""
 
-    product: str = Field(default="fundamentals", pattern="^(fundamentals|token)$")
+    product: str = Field(default="fundamentals", pattern="^(fundamentals|token|macro)$")
     identifier: str
     mode: str = Field(default="human", pattern="^(human|agent)$")
     settle: bool | None = Field(
@@ -104,7 +106,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
 
     # Wire the resource server to a facilitator and register the EXACT-EVM scheme
     # for our network. The facilitator does the on-chain verify + settle.
-    facilitator = HTTPFacilitatorClient(FacilitatorConfig(url=settings.facilitator_url))
+    facilitator = build_facilitator_client(settings)
     server = x402ResourceServer(facilitator)
     server.register(settings.network, ExactEvmServerScheme())
 
@@ -145,6 +147,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         ),
         "GET /research/fundamentals": _product_route("fundamentals", settings.research_price),
         "GET /research/token": _product_route("token", settings.token_research_price),
+        "GET /research/macro": _product_route("macro", settings.macro_research_price),
         # The testnet mock-Graph vendor: a PAID upstream that jim buys from.
         "POST /mock-graph/subgraphs/*": RouteConfig(
             accepts=_pay(settings.mock_graph_price),
@@ -211,6 +214,21 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         data. Margin = price_out − data_cost − inference_cost (see /dashboard).
         """
         result = await run_research(token, product="token", mode=mode)
+        if result.status == "error":
+            raise HTTPException(status_code=422, detail=result.error)
+        return ResearchResponse.from_result(result)
+
+    @app.get("/research/macro", response_model=ResearchResponse)
+    async def macro(
+        region: str = Query("US", description="Region (US only today)"),
+        mode: str = Query("human", pattern="^(human|agent)$"),
+    ) -> ResearchResponse:
+        """Paid. A cited US macro snapshot (Fed funds, CPI, Treasury yields).
+
+        Free, public-domain upstream (Fed/BLS/Treasury), so this is pure margin
+        like fundamentals — no buy leg. Reaching here means settlement succeeded.
+        """
+        result = await run_research(region, product="macro", mode=mode)
         if result.status == "error":
             raise HTTPException(status_code=422, detail=result.error)
         return ResearchResponse.from_result(result)

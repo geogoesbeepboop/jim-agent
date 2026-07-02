@@ -34,6 +34,11 @@ class Settings(BaseSettings):
         default="https://x402.org/facilitator",
         description="x402 facilitator that verifies + settles payments",
     )
+    # Coinbase CDP mainnet facilitator auth. When both are set, the facilitator
+    # client authenticates with CDP (and its URL overrides FACILITATOR_URL —
+    # see jim.marketplace.facilitator.build_facilitator_config).
+    cdp_api_key_id: str | None = Field(default=None, description="CDP API key ID")
+    cdp_api_key_secret: str | None = Field(default=None, description="CDP API key secret")
 
     # --- Seller side --------------------------------------------------------
     # The address that receives payments for our paywalled endpoints.
@@ -59,6 +64,21 @@ class Settings(BaseSettings):
     research_max_attempts: int = 2  # synthesize retries on a gate failure
     enable_judge: bool = True
     judge_threshold: float = 0.8  # faithfulness score below this fails the run
+    # High-stakes runs upgrade the faithfulness judge to a stronger model (per-claim
+    # checklist still applies). Used when run_research(high_stakes=True).
+    judge_high_stakes_model: str = "claude-sonnet-4-6"
+
+    # --- Research quality: memo cache + completeness -----------------------
+    # Before synthesizing, serve a recent cached memo for {product}:{identifier}:
+    # {mode} when the freshly-gathered snapshot is byte-identical (fingerprint) and
+    # the cached memo still passes the deterministic gate — eliminating redundant
+    # inference on repeated identical queries. Volatile data (moving prices) changes
+    # the fingerprint, so it correctly re-synthesizes; only truly-unchanged data hits.
+    memo_cache_enabled: bool = True
+    memo_cache_ttl_seconds: int = 86_400  # also bound freshness even if data looks same
+    # Completeness is a signal, not a gate: omitting a material line item lowers the
+    # quality score but never rejects a run (terse agent mode legitimately omits).
+    completeness_material_floor: float = 0.6  # share of material facts cited to "pass"
 
     # --- Phase 3: expanded metrics + adversarial debate --------------------
     enable_prices: bool = True  # enrich equities with market/technical metrics
@@ -89,6 +109,16 @@ class Settings(BaseSettings):
     token_research_price: str = "$0.50"  # price_out for an on-chain token memo
     per_query_budget_usd: float = 0.10  # hard ceiling on DATA spend per query
     purchase_cache_ttl_seconds: int = 86_400  # re-buy a datum at most once/day
+
+    # --- Data sources: macro context (free, public-domain) -----------------
+    # A free macro Source citing US-government primary sources (public domain,
+    # redistributable): Fed funds (NY Fed EFFR), CPI (BLS), Treasury yields
+    # (U.S. Treasury). Deliberately NOT FRED — FRED's API ToS forbids caching /
+    # redistribution, while the underlying agency data is public domain. See ADR-0007.
+    macro_research_price: str = "$0.15"  # price_out for a cited macro snapshot
+    # BLS API v2 key (free) lifts the daily request limit; v1 (keyless) is the
+    # fallback. Unset → keyless v1.
+    bls_api_key: str | None = None
 
     # --- Phase 4: continuous monitors (the "motley crew") ------------------
     # A monitor re-runs research on a schedule, diffs against its last baseline,

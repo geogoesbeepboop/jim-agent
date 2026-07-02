@@ -89,13 +89,21 @@ def _static_checks(s: Settings) -> list[Check]:
     checks.append(Check("asset", "info", f"Settlement asset USDC at {s.usdc_address}."))
 
     testnet_facilitator = "x402.org/facilitator" in s.facilitator_url
-    if s.is_mainnet and testnet_facilitator:
+    cdp_configured = bool(s.cdp_api_key_id and s.cdp_api_key_secret)
+    if cdp_configured:
+        # build_facilitator_config() overrides FACILITATOR_URL with CDP's mainnet
+        # endpoint whenever both CDP vars are set — see jim.marketplace.facilitator.
+        checks.append(
+            Check("facilitator", "ok", "Coinbase CDP facilitator configured (authenticated).")
+        )
+    elif s.is_mainnet and testnet_facilitator:
         checks.append(
             Check(
                 "facilitator",
                 "fail",
                 f"{s.facilitator_url} is the testnet facilitator; it cannot settle on "
-                "mainnet. Point FACILITATOR_URL at a mainnet facilitator (e.g. Coinbase CDP).",
+                "mainnet. Set CDP_API_KEY_ID/CDP_API_KEY_SECRET (Coinbase CDP facilitator) "
+                "or point FACILITATOR_URL at another mainnet facilitator.",
             )
         )
     else:
@@ -146,6 +154,15 @@ async def _balance_checks(s: Settings) -> list[Check]:
         return [Check("balances", "info", "Set MAINNET_RPC_URL to read on-chain balances.")]
     if not s.evm_address:
         return []
+    if not s.is_mainnet:
+        return [
+            Check(
+                "balances",
+                "info",
+                "MAINNET_RPC_URL is set but NETWORK is still testnet, so the balance read "
+                "would query the wrong USDC contract. Flip NETWORK=eip155:8453 first.",
+            )
+        ]
     try:
         import httpx
 
@@ -156,8 +173,8 @@ async def _balance_checks(s: Settings) -> list[Check]:
             usdc_hex = await _rpc(
                 c, s.mainnet_rpc_url, "eth_call", [{"to": s.usdc_address, "data": data}, "latest"]
             )
-        eth = int(eth_hex, 16) / 1e18
-        usdc = int(usdc_hex, 16) / 1e6
+        eth = int(eth_hex, 16) / 1e18 if eth_hex and eth_hex != "0x" else 0.0
+        usdc = int(usdc_hex, 16) / 1e6 if usdc_hex and usdc_hex != "0x" else 0.0
     except Exception as e:  # network/parse error — never fatal
         return [Check("balances", "warn", f"Could not read balances: {e}")]
 

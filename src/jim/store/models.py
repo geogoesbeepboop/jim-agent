@@ -106,6 +106,30 @@ class PaymentReceipt(Base):
     )
 
 
+class MemoCacheEntry(Base):
+    """A synthesized memo cached for exact reuse (research-quality memo cache).
+
+    Keyed by ``{product}:{identifier}:{mode}`` and stamped with the snapshot
+    ``fingerprint`` it was written from. A later query reuses it only when the
+    freshly-gathered snapshot fingerprint matches and the entry is within TTL —
+    so identical repeat queries skip synthesis entirely. Upsert-by-key: one row
+    per key, overwritten when the data changes."""
+
+    __tablename__ = "memo_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    cache_key: Mapped[str] = mapped_column(String(256), unique=True, index=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    memo: Mapped[str] = mapped_column(Text)
+    debate: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
 class MonitorRow(Base):
     """A saved monitor (Phase 4). The full directive + rolling state lives in
     ``data`` (Monitor.to_row()); ``enabled`` + ``next_run_at`` are surfaced as
