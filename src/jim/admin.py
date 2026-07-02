@@ -196,7 +196,8 @@ def admin_html(data: dict, service_name: str = "jim") -> str:
 <header>
   <h1>{service_name} — admin · settlements &amp; on-chain audit</h1>
   <nav>
-    <a href="/">storefront</a><a href="/dashboard">margin dashboard</a>
+    <a href="/">storefront</a><a href="/proof">proof</a>
+    <a href="/dashboard">margin dashboard</a>
     <a href="/admin/audit">audit (json)</a><a href="/map">system map</a>
   </nav>
 </header>

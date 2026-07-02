@@ -41,6 +41,7 @@ from jim.marketplace.catalog import build_catalog, listing_for
 from jim.marketplace.discovery import discovery_manifest
 from jim.marketplace.mainnet import check_mainnet_readiness
 from jim.marketplace.pricing import pricing_schedule
+from jim.marketplace.proof import proof_html, proof_stats
 from jim.marketplace.sysmap import to_html as sysmap_html
 from jim.marketplace.sysmap import to_json as sysmap_json
 from jim.marketplace.sysmap import to_mermaid as sysmap_mermaid
@@ -289,15 +290,31 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     async def mock_peer(
         identifier: str = Query(..., description="Ticker/token the peer analyzes"),
     ) -> dict:
-        """Paid testnet peer agent: sentiment-shaped facts in the peer wire format."""
+        """Paid testnet peer agent: sentiment-shaped facts in the peer wire format.
+
+        Set ``MOCK_PEER_CORRUPT=true`` to play the lying peer for the trust-decay
+        demo — unusable rows that jim's peer loop refuses and debits.
+        """
         from jim.vendor.mock_peer import build_mock_peer_response
 
-        return build_mock_peer_response(identifier)
+        return build_mock_peer_response(identifier, corrupt=settings.mock_peer_corrupt)
 
     @app.get("/dashboard")
     async def dashboard() -> dict:
         """Free. Per-query margin: revenue − data cost − inference cost."""
         return await margin_dashboard()
+
+    @app.get("/proof", response_class=HTMLResponse)
+    async def proof() -> str:
+        """Free. The public proof page: live settlements, gate verdicts, refused
+        money, and outcome-based trust — radical transparency, reproducible from
+        the store (Horizon 1)."""
+        return proof_html(await proof_stats())
+
+    @app.get("/proof.json")
+    async def proof_json() -> dict:
+        """Free. The proof page's machine view."""
+        return await proof_stats()
 
     @app.get("/admin/audit")
     async def admin_audit(limit: int = Query(50, ge=1, le=500)) -> dict:

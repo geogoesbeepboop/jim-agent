@@ -63,6 +63,8 @@ jim-monitor = "jim.monitors.cli:main"
 jim-market = "jim.marketplace.cli:main"
 jim-map = "jim.marketplace.sysmap:main"
 jim-mcp = "jim.marketplace.mcp_server:main"
+# Horizon 1 — onchain identity (guarded) + signed gate-verdict receipts.
+jim-identity = "jim.interop.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.9.2,<0.10.0"]

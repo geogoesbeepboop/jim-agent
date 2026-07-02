@@ -1,0 +1,16 @@
+.git
+.venv
+.env
+.env.*
+!.env.example
+.claude
+.mcp.json
+__pycache__
+*.pyc
+.pytest_cache
+.hypothesis
+tests
+scripts
+docs
+map.html
+docker-compose.yml
