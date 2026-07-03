@@ -46,6 +46,55 @@ def test_mermaid_is_wellformed_and_has_no_dangling_edges() -> None:
     assert "\\n" not in mer
 
 
+def test_no_node_id_collides_with_a_subgraph_id() -> None:
+    """Regression: a node id equal to its subgraph's id ("store" used to be
+    both) makes Mermaid 11 fail with "Syntax error in text" at render time —
+    this is invisible to a plain "are ids unique among nodes" check."""
+    g = system_graph(_settings())
+    node_ids = {n.id for n in g.nodes}
+    group_ids = {gid for gid, _ in g.groups}
+    assert node_ids & group_ids == set()
+
+
+def test_edge_labels_with_punctuation_survive_mermaid_quoting() -> None:
+    """Regression: an unquoted `-->|label|` edge label containing "(" / ")"
+    (e.g. the memo-cache hit label) doesn't parse in Mermaid 11 even though the
+    identical text is fine inside a quoted node label — every edge label must
+    render quoted."""
+    mer = to_mermaid(system_graph(_settings()))
+    for line in mer.splitlines():
+        if "-->|" in line:
+            label = line.split("-->|", 1)[1].rsplit("|", 1)[0]
+            assert label.startswith('"') and label.endswith('"'), line
+
+
+def test_peer_sources_appear_as_composed_nodes() -> None:
+    g = system_graph(
+        _settings(
+            peer_sources='[{"name":"mock-sentiment","url":"http://localhost:4021/mock-peer/research"}]'
+        )
+    )
+    ids = {n.id for n in g.nodes}
+    # The peer slug is sanitized (no "-") so it can't be confused with the
+    # mermaid "-->" arrow token when embedded in an edge.
+    assert "peer_mock_sentiment" in ids
+    node_ids = ids
+    for e in g.edges:
+        assert e.src in node_ids, e.src
+        assert e.dst in node_ids, e.dst
+
+    no_peers = {n.id for n in system_graph(_settings(peer_sources=None)).nodes}
+    assert not any(i.startswith("peer_") for i in no_peers)
+
+
+def test_agent_economy_and_horizon1_nodes_present() -> None:
+    """The map should show what's actually wired up: cross-agent call-chain
+    guard, the trust ledger, and the Horizon 1 proof/agent-card surfaces."""
+    ids = {n.id for n in system_graph(_settings()).nodes}
+    for expected in ("call_chain", "trust_ledger", "proof", "agent_card", "resilience"):
+        assert expected in ids, expected
+
+
 def test_graph_reflects_feature_flags() -> None:
     debate_off = {n.id for n in system_graph(_settings(enable_debate=False)).nodes}
     assert "debate" not in debate_off

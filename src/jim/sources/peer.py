@@ -32,8 +32,11 @@ import re
 from dataclasses import dataclass, replace
 from urllib.parse import quote
 
+import httpx
+
 from jim.buyer.client import pay
 from jim.config import get_settings
+from jim.net.resilience import CircuitOpen
 from jim.research.facts import (
     COUNT,
     INDEX,
@@ -252,7 +255,15 @@ class CompositeSource:
         for peer in self.peers:
             try:
                 bought = await peer.gather(identifier, budget=budget, store=store)
-            except (BudgetExceeded, ProcurementError) as e:
+            except (
+                BudgetExceeded,
+                ProcurementError,
+                CircuitOpen,
+                httpx.TransportError,
+                httpx.TimeoutException,
+            ) as e:
+                # A peer that's down, slow, or unreachable degrades the same way as
+                # a refused buy: skipped with a note, never fatal to the whole run.
                 notes.append(f"{peer.name}: skipped — {e}")
                 continue
             added = 0

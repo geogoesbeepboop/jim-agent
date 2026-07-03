@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import json
 
+import httpx
 import pytest
 
 from jim.buyer.client import PaidResponse
 from jim.config import Settings
+from jim.net import resilience
 from jim.research.budget import BudgetCap
 from jim.sources.base import BudgetExceeded, ProcurementError
 from jim.sources.peer import PeerSource, PeerSpec, parse_peer_specs
@@ -69,6 +71,33 @@ def _default_settings(monkeypatch):
         peer_trust_min_events=3,
     )
     monkeypatch.setattr(peer_mod, "get_settings", lambda: settings)
+
+
+@pytest.fixture(autouse=True)
+def _instant_resilience(monkeypatch):
+    """Fresh circuit breakers, no real sleeping between retries."""
+    resilience.reset_breakers()
+
+    async def no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(resilience, "_sleep", no_sleep)
+    monkeypatch.setattr(resilience, "_rand", lambda: 0.0)
+    yield
+    resilience.reset_breakers()
+
+
+class UnreachableBuy:
+    """Stands in for a peer whose host refuses the connection (e.g. down, wrong
+    port) — mirrors ``httpx.ConnectError('[Errno 61] Connection refused')``."""
+
+    def __init__(self):
+        self.calls = 0
+
+    async def __call__(self, url, *, method="GET", json_body=None, private_key=None,
+                       max_price_usd=None, headers=None):
+        self.calls += 1
+        raise httpx.ConnectError("[Errno 61] Connection refused")
 
 
 async def test_peer_facts_become_a_cited_snapshot() -> None:
@@ -145,6 +174,47 @@ async def test_budget_cap_refuses_the_buy() -> None:
             "AAPL", budget=BudgetCap(ceiling_usd=0.001), store=MemoryStore()
         )
     assert buy.calls == []
+
+
+async def test_unreachable_peer_retries_then_raises_when_used_standalone() -> None:
+    """A refused connection is retried (resilience wrapper) then surfaces as-is —
+    a bare PeerSource has no one to degrade to, so the caller must handle it."""
+    buy = UnreachableBuy()
+    with pytest.raises(httpx.ConnectError):
+        await PeerSource(SPEC, buy_fn=buy).gather(
+            "AAPL", budget=BudgetCap(ceiling_usd=0.10), store=MemoryStore()
+        )
+    assert buy.calls == 3  # 1 + resilience_retries(2) attempts, not a single hard failure
+
+
+async def test_unreachable_peer_degrades_to_a_note_when_composed() -> None:
+    """The actual reported bug: a peer that's down (connection refused) must not
+    turn the whole research run into an opaque 422 — CompositeSource should skip
+    it with a note and still return the primary source's data."""
+    from jim.sources.peer import CompositeSource
+
+    class FakePrimary:
+        name = "fundamentals"
+        is_paid = False
+
+        async def gather(self, identifier, *, budget, store):
+            from jim.research.facts import USD, Fact, Snapshot
+
+            snap = Snapshot(
+                ticker=identifier.upper(), cik="1", entity_name="Test Corp",
+                facts=[Fact(id="C1", label="Revenue", value=1e9, unit=USD)],
+            )
+            from jim.sources.base import GatherResult
+
+            return GatherResult(snapshot=snap, cost_in_usd=0.0, cache_hit=False)
+
+    buy = UnreachableBuy()
+    source = CompositeSource(FakePrimary(), [PeerSource(SPEC, buy_fn=buy)])
+    result = await source.gather("AAPL", budget=BudgetCap(ceiling_usd=0.10), store=MemoryStore())
+
+    assert len(result.snapshot.facts) == 1  # only the primary fact — peer skipped
+    assert any("peer:mock-sentiment: skipped" in n for n in result.notes)
+    assert buy.calls == 3  # still went through the retry policy before giving up
 
 
 # --- PEER_SOURCES parsing -----------------------------------------------------

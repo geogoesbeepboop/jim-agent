@@ -27,6 +27,7 @@ from dataclasses import asdict, dataclass, field
 
 from jim.config import Settings, get_settings
 from jim.marketplace.catalog import build_catalog
+from jim.sources.peer import parse_peer_specs
 
 
 @dataclass
@@ -79,7 +80,10 @@ def system_graph(settings: Settings | None = None) -> SystemGraph:
         ("trust", "Deterministic trust gates"),
         ("sources", "Sources"),
         ("external", "External tools / upstreams"),
-        ("store", "Store + margin ledger"),
+        # NOTE: this group's id must differ from the "store" *node* id below —
+        # Mermaid errors ("Syntax error in text") when a subgraph id collides
+        # with a node id.
+        ("storage", "Store + margin ledger"),
         ("monitors", "Monitors (Phase 4)"),
         ("obs", "Observability"),
     ]
@@ -103,8 +107,24 @@ def system_graph(settings: Settings | None = None) -> SystemGraph:
     )
     g.add(Node("bazaar", "Bazaar index<br/>(auto on 1st settle)", "discovery", "discovery"))
     g.add(Node("mcp_srv", f"MCP server<br/>{s.public_url}/mcp", "discovery", "discovery"))
+    g.add(
+        Node(
+            "agent_card",
+            "GET /.well-known/agent-card.json<br/>(ERC-8004-shaped identity)",
+            "discovery",
+            "discovery",
+        )
+    )
 
     # --- Payment rails ---
+    g.add(
+        Node(
+            "call_chain",
+            "call-chain guard<br/>(X-Jim-Call-Chain: loop/depth → 409)",
+            "payments",
+            "payment",
+        )
+    )
     g.add(Node("mw", "x402 middleware<br/>(402 → verify → settle)", "payments", "payment"))
     g.add(Node("facilitator", f"Facilitator<br/>{_short_host(s.facilitator_url)}", "payments", "payment"))
     g.add(Node("usdc", f"USDC on {net}<br/>{_short_addr(s.usdc_address)}", "payments", "payment"))
@@ -136,12 +156,30 @@ def system_graph(settings: Settings | None = None) -> SystemGraph:
     g.add(Node("completeness", "completeness<br/>(omission signal)", "trust", "gate"))
     g.add(Node("impersonal", "impersonal guard", "trust", "gate"))
     g.add(Node("budget", "budget cap<br/>(propose/dispose)", "trust", "gate"))
+    g.add(
+        Node(
+            "trust_ledger",
+            "trust ledger<br/>(Laplace pass-rate per source)",
+            "trust",
+            "gate",
+        )
+    )
 
     # --- Sources ---
     g.add(Node("fundamentals_src", "FundamentalsSource<br/>(free)", "sources", "source"))
     graph_badge = "PAID · live" if s.graph_live else "PAID · mock"
     g.add(Node("graph_src", f"GraphSource<br/>({graph_badge} · multi-chain)", "sources", "source"))
     g.add(Node("macro_src", "MacroSource<br/>(free · public-domain)", "sources", "source"))
+    peer_specs = parse_peer_specs(s.peer_sources)
+    for spec in peer_specs:
+        g.add(
+            Node(
+                f"peer_{_node_safe(spec.name)}",
+                f"PeerSource<br/>{spec.name} (x402)",
+                "sources",
+                "source",
+            )
+        )
 
     # --- External tools ---
     g.add(Node("edgar", "SEC EDGAR<br/>(public domain)", "external", "external"))
@@ -155,11 +193,12 @@ def system_graph(settings: Settings | None = None) -> SystemGraph:
 
     # --- Store ---
     backend = "Postgres + pgvector" if s.database_url else "In-memory (dev)"
-    g.add(Node("store", f"Store<br/>{backend}", "store", "store"))
-    g.add(Node("cache", "cache (data_purchases)<br/>buy once · resell many", "store", "store"))
-    g.add(Node("ledger", "margin ledger<br/>(query_records)", "store", "store"))
-    g.add(Node("receipts", "audit log<br/>(payment_receipts)", "store", "store"))
+    g.add(Node("store", f"Store<br/>{backend}", "storage", "store"))
+    g.add(Node("cache", "cache (data_purchases)<br/>buy once · resell many", "storage", "store"))
+    g.add(Node("ledger", "margin ledger<br/>(query_records)", "storage", "store"))
+    g.add(Node("receipts", "audit log<br/>(payment_receipts)", "storage", "store"))
     g.add(Node("admin", "GET /admin<br/>(revenue · buyers · tx)", "seller", "seller"))
+    g.add(Node("proof", "GET /proof<br/>(live settlements · verdicts · trust)", "seller", "seller"))
 
     # --- Monitors ---
     sched = "scheduler (in-seller)" if s.monitor_autostart else "scheduler (jim-monitor serve)"
@@ -172,16 +211,30 @@ def system_graph(settings: Settings | None = None) -> SystemGraph:
 
     obs_on = "configured" if os.getenv("LANGFUSE_PUBLIC_KEY") else "best-effort (no-op if unset)"
     g.add(Node("langfuse", f"Langfuse traces<br/>{obs_on}", "obs", "obs"))
+    g.add(
+        Node(
+            "resilience",
+            "resilience guard<br/>(timeout · retry · per-host breaker)",
+            "obs",
+            "obs",
+        )
+    )
 
     # --- Edges ---
     # Buyers reach discovery + the rails.
     g.link("mcp_agent", "mcp_srv", "discover")
     g.link("http_agent", "wellknown", "discover")
     g.link("http_agent", "catalog", "browse")
+    g.link("http_agent", "agent_card", "discover")
     g.link("human", "route_fundamentals" if listings else "mw", "checkout")
-    g.link("mcp_srv", "mw", "x402-gated")
+    g.link("mcp_srv", "call_chain", "x402-gated")
     g.link("catalog", "bazaar", "indexes")
     g.link("wellknown", "bazaar", "indexes")
+    g.link("agent_card", "bazaar", "indexes")
+
+    # Cross-agent calls carry X-Jim-Call-Chain; the guard runs before the 402
+    # challenge is even answered (loop / too-deep → 409, no money moves).
+    g.link("call_chain", "mw", "sane chain")
 
     # Pay → settle.
     for listing in listings:
@@ -222,6 +275,21 @@ def system_graph(settings: Settings | None = None) -> SystemGraph:
     g.link("graph_src", "budget", "propose")
     g.link("budget", "thegraph", "dispose → buy (x402)")
     g.link("graph_src", "cache", "cache-first")
+    g.link("edgar", "resilience", "guarded")
+    g.link("govdata", "resilience", "guarded")
+    if s.enable_prices:
+        g.link("yahoo", "resilience", "guarded")
+    g.link("thegraph", "resilience", "guarded")
+
+    # Peer agents (Phase 7): jim composes a Source with configured peers — same
+    # procure() → budget → cache path as The Graph, gated by the trust floor.
+    for spec in peer_specs:
+        node = f"peer_{_node_safe(spec.name)}"
+        g.link("gather", node, "compose")
+        g.link("trust_ledger", node, "trust floor check")
+        g.link(node, "budget", "propose")
+        g.link("budget", node, "dispose → buy (x402)")
+        g.link(node, "resilience", "guarded")
 
     # Store wiring.
     g.link("store", "cache")
@@ -233,6 +301,14 @@ def system_graph(settings: Settings | None = None) -> SystemGraph:
     # which the admin dashboard reads back (revenue · buyers · on-chain tx).
     g.link("mw", "receipts", "settle → audit")
     g.link("receipts", "admin", "read")
+    g.link("receipts", "proof", "read")
+    g.link("trust_ledger", "proof", "read")
+
+    # Trust ledger: every gated run attributes an ok/fail per implicated source
+    # (EDGAR, The Graph, each peer) — the reputation signal the trust-floor
+    # check above reads before paying a peer again.
+    g.link("gate", "trust_ledger", "attribute outcome")
+    g.link("trust_ledger", "store", "persist")
 
     # Monitors reuse the engine.
     g.link("monitor_sched", "triggers", "diff → crew")
@@ -284,7 +360,11 @@ def to_mermaid(graph: SystemGraph | None = None, *, settings: Settings | None = 
     lines.append("")
     for e in g.edges:
         if e.label:
-            lines.append(f'  {e.src} -->|{e.label}| {e.dst}')
+            # Quote the label: Mermaid 11's parser chokes on bare "(" / ")" (and
+            # other punctuation) inside an unquoted `-->|label|` edge label —
+            # e.g. "hit → serve ($0)" — even though the same text is fine inside
+            # a quoted node label.
+            lines.append(f'  {e.src} -->|"{e.label}"| {e.dst}')
         else:
             lines.append(f"  {e.src} --> {e.dst}")
 
@@ -338,6 +418,7 @@ def to_html(graph: SystemGraph | None = None, *, settings: Settings | None = Non
     <span class="badge">debate: {"on" if s.enable_debate else "off"}</span>
     <span class="badge">prices: {"on" if s.enable_prices else "off"}</span>
     <span class="badge">graph: {"live" if s.graph_live else "mock"}</span>
+    <span class="badge">peers: {len(parse_peer_specs(s.peer_sources))} configured</span>
   </div>
 </header>
 <div class="wrap">
@@ -366,6 +447,13 @@ def _short_addr(addr: str | None) -> str:
 
 def _short_host(url: str) -> str:
     return url.replace("https://", "").replace("http://", "").split("/")[0]
+
+
+def _node_safe(name: str) -> str:
+    """A config-derived name (e.g. a peer slug) into a safe Mermaid node id —
+    only ``[a-zA-Z0-9_]``, since ``-`` risks colliding with the ``-->`` arrow
+    token and other punctuation isn't valid in an unquoted node id at all."""
+    return "".join(c if c.isalnum() else "_" for c in name)
 
 
 # --- CLI: jim-map -----------------------------------------------------------

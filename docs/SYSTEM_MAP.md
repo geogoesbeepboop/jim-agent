@@ -68,7 +68,7 @@ flowchart LR
   subgraph ext["⑧ External tools / upstreams"]
     edgar["SEC EDGAR<br/>(public domain)"]
     yahoo["Yahoo charts<br/>(price/technicals)"]
-    graph["The Graph / mock<br/>(Uniswap v3)"]
+    thegraph["The Graph / mock<br/>(Uniswap v3)"]
   end
 
   subgraph store["⑨ Store + margin ledger"]
@@ -109,7 +109,7 @@ flowchart LR
   gather --> fsrc --> edgar
   fsrc --> yahoo
   gather --> gsrc
-  gsrc --> budget -- "dispose → buy (x402)" --> graph
+  gsrc --> budget -- "dispose → buy (x402)" --> thegraph
   gsrc --> cache
 
   gather --> store
@@ -137,6 +137,16 @@ on ⑧ external tools; paid data passes the ⑥ budget cap and is cached in ⑨ 
 *next* sale of the same datum is nearly pure margin. ⑩ monitors re-run the engine
 on a cadence and only speak when the materiality gate says there's news. ⑪ traces
 everything, best-effort.
+
+**What's simplified here.** This picture predates two additions that the
+[live map](#the-live-map) *does* show: the Phase 7 agent economy — peers
+composed into ⑦ sources, a per-source trust ledger, and a call-chain guard on
+③ that refuses cross-agent loops/over-depth before the paywall (detailed in
+§6b) — and the Horizon 1 additions: a `GET /proof` page (live settlements +
+gate verdicts + trust scores) next to ④, `GET /.well-known/agent-card.json`
+next to ②, and a resilience wrapper (timeout/retry/circuit-breaker) in front
+of every free and paid upstream call. Run `jim-map` or open `GET /map` for the
+current wiring, including whichever of these are actually active.
 
 ---
 

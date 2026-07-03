@@ -235,15 +235,26 @@ the economics and what was refused (proprietary transcripts / EPS estimates).
 jim already degrades well by *absence* (no key → deterministic fallback, no DB →
 memory store, no Yahoo → EDGAR-only); `resilient_call` adds degradation by
 *failure*. Every free upstream request (EDGAR ticker map + companyfacts, Yahoo
-chart, the three macro agencies) runs under one small helper: a wall-clock
-timeout per attempt, bounded retries with exponential backoff + jitter, and a
-per-host circuit breaker (open after N consecutive transport failures → fail
-fast with `CircuitOpen`; one half-open probe after the cooldown). Only
-transport-level failures and timeouts retry — HTTP 4xx/5xx are semantic and stay
-with the sources' existing handling, so `EdgarError` and the best-effort `None`/
-drop-the-reading paths surface exactly as before. Knobs live in `Settings`
-(`RESILIENCE_*`); like tracing, the wrapper is invisible when upstreams are
-healthy (one request per call).
+chart, the three macro agencies) **and** every paid x402 buy (`procure()` in
+[sources/base.py](../src/jim/sources/base.py) — The Graph, peer agents) runs
+under one small helper: a wall-clock timeout per attempt, bounded retries with
+exponential backoff + jitter, and a per-host circuit breaker (open after N
+consecutive transport failures → fail fast with `CircuitOpen`; one half-open
+probe after the cooldown). Only transport-level failures and timeouts retry —
+HTTP 4xx/5xx are semantic and stay with the sources' existing handling, so
+`EdgarError` and the best-effort `None`/drop-the-reading paths surface exactly
+as before. Knobs live in `Settings` (`RESILIENCE_*`); like tracing, the wrapper
+is invisible when upstreams are healthy (one request per call).
+
+A peer buy that still fails after retries (down host, refused connection,
+timeout) isn't fatal to the run: `CompositeSource.gather` catches transport
+failures the same way it catches `BudgetExceeded`/`ProcurementError` — skipped
+with a note in the response's sourcing block, primary data still ships. Before
+this, a raw `ConnectionRefusedError` from an unreachable peer escaped as an
+unhandled exception and surfaced to callers as an opaque HTTP 422 with a bare
+errno string (`"[Errno 61] Connection refused"`) instead of a graceful
+degradation — see [test_peer_source.py](../tests/test_peer_source.py)'s
+`test_unreachable_peer_degrades_to_a_note_when_composed`.
 
 ### 6.1 Propose / dispose ([base.py](../src/jim/sources/base.py) `procure`, [budget.py](../src/jim/research/budget.py))
 

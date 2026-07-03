@@ -2,7 +2,8 @@
 
 jim already degrades well by *absence* (no key → deterministic fallback, no DB →
 in-memory store, no Yahoo → EDGAR-only); this module adds degradation by
-*failure*. Every free upstream fetch (EDGAR, Yahoo, macro) runs through
+*failure*. Every free upstream fetch (EDGAR, Yahoo, macro) and every paid x402
+buy (``jim.sources.base.procure`` — The Graph, peer agents) runs through
 ``resilient_call``, which gives each attempt:
 
 - a wall-clock timeout (``asyncio.timeout``), a backstop on top of any client
