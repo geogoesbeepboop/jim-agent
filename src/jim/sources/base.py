@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Protocol
+from urllib.parse import urlsplit
 
+from jim.net.resilience import resilient_call
 from jim.research.budget import BudgetCap
 from jim.research.facts import Snapshot
 from jim.store import Store
@@ -89,12 +91,15 @@ async def procure(
     from jim.interop.callchain import CallChainDepthExceeded
 
     try:
-        resp = await buy_fn(
-            url,
-            method=method,
-            json_body=json_body,
-            private_key=private_key,
-            max_price_usd=budget.remaining_usd,
+        resp = await resilient_call(
+            lambda: buy_fn(
+                url,
+                method=method,
+                json_body=json_body,
+                private_key=private_key,
+                max_price_usd=budget.remaining_usd,
+            ),
+            host=urlsplit(url).netloc,
         )
     except (PriceCapExceeded, CallChainDepthExceeded) as e:
         # Both are deterministic refusals to spend, made before any settlement.
