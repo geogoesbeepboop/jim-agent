@@ -7,6 +7,10 @@ number citable to a real document.
 
 SEC asks for a descriptive User-Agent with contact info and rate-limits to
 ~10 req/s; a fundamentals snapshot costs 1–2 requests so we stay well under.
+
+Each outbound request runs under jim.net.resilience (timeout + bounded retries
++ per-host breaker) for transport-level failures; HTTP status handling — the 404
+→ ``EdgarError`` path included — stays here, unretried.
 """
 
 from __future__ import annotations
@@ -18,6 +22,7 @@ from datetime import date
 import httpx
 
 from jim.config import get_settings
+from jim.net.resilience import resilient_call
 from jim.research.facts import (
     PERCENT,
     SHARES,
@@ -158,7 +163,7 @@ async def _ticker_to_cik(client: httpx.AsyncClient, ticker: str) -> str:
     ticker = ticker.upper().strip()
     async with _ticker_lock:
         if not _ticker_cache:
-            resp = await client.get(TICKERS_URL)
+            resp = await resilient_call(lambda: client.get(TICKERS_URL), host="www.sec.gov")
             resp.raise_for_status()
             for row in resp.json().values():
                 _ticker_cache[row["ticker"].upper()] = f"{int(row['cik_str']):010d}"
@@ -290,7 +295,9 @@ async def fetch_snapshot(ticker: str) -> Snapshot:
 
     async with httpx.AsyncClient(headers=headers, timeout=timeout) as client:
         cik = await _ticker_to_cik(client, ticker)
-        resp = await client.get(COMPANYFACTS_URL.format(cik=cik))
+        resp = await resilient_call(
+            lambda: client.get(COMPANYFACTS_URL.format(cik=cik)), host="data.sec.gov"
+        )
         if resp.status_code == 404:
             raise EdgarError(f"No XBRL company facts on file for {ticker.upper()} (CIK {cik}).")
         resp.raise_for_status()

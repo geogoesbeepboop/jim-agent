@@ -80,6 +80,12 @@ class Snapshot:
     entity_name: str
     facts: list[Fact] = field(default_factory=list)
     as_of: str | None = None  # latest filing date among the facts
+    # Phase 7: fact id → source name, for snapshots composed from several
+    # sources (a peer agent's facts merged into a primary snapshot). Empty means
+    # "everything came from the product's own source". Feeds the trust ledger's
+    # gate-outcome attribution; deliberately not part of the fingerprint (the
+    # data identity is the values, not who sold them).
+    origins: dict[str, str] = field(default_factory=dict)
 
     def by_id(self, fact_id: str) -> Fact | None:
         for f in self.facts:

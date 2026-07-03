@@ -61,6 +61,9 @@ def discovery_manifest(base_url: str | None = None) -> dict:
             "tools": [f"research_{listing.product}" for listing in listings],
             "note": "Tools are x402-gated: the MCP call triggers the 402 → pay → settle cycle.",
         },
+        # The A2A agent card (Phase 7) — a link, not an embed: task delegation
+        # is its own document (see jim.marketplace.agentcard).
+        "agent_card": f"{base}/.well-known/agent-card.json",
         "trust": {
             "sourcing_gate": "deterministic; every published figure must match a cited fact",
             "impersonal": "general analysis only — no personalized advice (publisher's-exclusion lane)",

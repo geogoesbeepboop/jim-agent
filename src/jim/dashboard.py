@@ -18,6 +18,7 @@ async def margin_dashboard(limit: int = 20) -> dict:
         "summary": await store.margin_summary(),
         "recent": await store.recent_queries(limit),
         "monitors": await store.monitor_stats(),
+        "trust": await store.trust_scores(),
     }
 
 
@@ -47,6 +48,21 @@ def render_text(data: dict) -> str:
         )
     if not data["recent"]:
         lines.append("  (no queries recorded yet — run some research first)")
+
+    trust = data.get("trust") or {}
+    if trust:
+        lines.extend(
+            [
+                "-" * 78,
+                "  Source trust (Phase 7 — gate pass-rate as reputation)",
+                "-" * 78,
+            ]
+        )
+        for row in sorted(trust.values(), key=lambda r: r["score"], reverse=True):
+            lines.append(
+                f"  {row['source']:<24}score {row['score']:.2f}   "
+                f"(pass {row['ok']} · fail {row['fail']})"
+            )
 
     m = data.get("monitors")
     if m and m.get("total_runs"):

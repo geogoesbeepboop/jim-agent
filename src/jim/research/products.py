@@ -4,7 +4,9 @@
   - "token"        → The Graph (paid upstream) → priced at token_research_price
 
 The sale price minus (data cost + inference cost) is the per-query margin the
-Phase 2 dashboard reports.
+Phase 2 dashboard reports. When ``PEER_SOURCES`` names peer agents (Phase 7),
+each product's source is composed with the peers configured for it — jim then
+buys their signals inside the same run and the gate verifies the merged facts.
 """
 
 from __future__ import annotations
@@ -28,24 +30,38 @@ class Product:
     identifier_label: str  # what the identifier means, for help text
 
 
+def _compose_peers(product: str, source: Source) -> Source:
+    """Wrap ``source`` with the peer agents configured for this product."""
+    from jim.sources.peer import CompositeSource, PeerSource, parse_peer_specs
+
+    specs = [
+        spec
+        for spec in parse_peer_specs(get_settings().peer_sources)
+        if not spec.products or product in spec.products
+    ]
+    if not specs:
+        return source
+    return CompositeSource(source, [PeerSource(spec) for spec in specs])
+
+
 def get_products() -> dict[str, Product]:
     s = get_settings()
     return {
         "fundamentals": Product(
             name="fundamentals",
-            source=FundamentalsSource(),
+            source=_compose_peers("fundamentals", FundamentalsSource()),
             price_out_usd=usd(s.research_price),
             identifier_label="stock ticker (e.g. AAPL)",
         ),
         "token": Product(
             name="token",
-            source=GraphSource(),
+            source=_compose_peers("token", GraphSource()),
             price_out_usd=usd(s.token_research_price),
             identifier_label="token symbol or 0x address, optional :chain (e.g. WETH, AERO:base)",
         ),
         "macro": Product(
             name="macro",
-            source=MacroSource(),
+            source=_compose_peers("macro", MacroSource()),
             price_out_usd=usd(s.macro_research_price),
             identifier_label="region (US) — cited Fed funds / CPI / Treasury context",
         ),

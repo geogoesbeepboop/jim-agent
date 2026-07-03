@@ -25,15 +25,16 @@ new features on an unverified core just multiply the unknowns.
       100% coverage, a positive-margin dashboard, a debate-vs-single-pass lift, a
       monitor pushing a real update, a mainnet settle). Close them top to bottom;
       they are the end-to-end proof the offline tests intentionally stop short of.
-- [ ] **Fuzz the sourcing gate** ([gate.py](../src/jim/research/gate.py)). It is
-      the most security-critical code in the system and today it is regex Pass A /
-      Pass B. Add property-based tests (Hypothesis): plant numbers as scientific
-      notation, unicode digits, non-US thousands separators, negatives, ranges
-      ("$1.2–1.4B"), spelled-out percents, and currency-symbol variants, and
-      assert the gate *never* lets an unsourced figure through and *never* false-
-      rejects a sourced one. Consider a tokenizer-based numeric extractor if the
-      regex proves bypassable. This is the highest-leverage robustness work in the
-      whole project.
+- [x] **Fuzz the sourcing gate** ([gate.py](../src/jim/research/gate.py)). Done —
+      and it was as leveraged as predicted: the probe found 8 bypass classes
+      (sci notation, "5 billion" without grouping, bare integer runs, `5B`
+      suffixes, underscores, spelled-out figures, €/£, `999999k`) and 2
+      false-reject classes (ranges, accounting negatives — the likely root
+      cause of the rejected first-mainnet COIN memo). The extractor now catches
+      all of them; loss phrasing over negative facts matches by magnitude; a
+      Hypothesis property suite ([test_gate_fuzz.py](../tests/test_gate_fuzz.py))
+      pins both invariants over random values. See
+      [ADR-0008](adr/0008-agent-economy-trust-callchain-billing.md).
 - [ ] **Record-and-replay integration tests** for the live upstreams (EDGAR,
       Yahoo, The Graph). Cassette the real responses once, replay in CI — so a
       change to [edgar.py](../src/jim/research/edgar.py) parsing is caught without
@@ -50,12 +51,16 @@ new features on an unverified core just multiply the unknowns.
 Goal: jim survives the real world — flaky upstreams, partial failures, a hostile
 caller, a key that must rotate.
 
-- [ ] **Resilience wrapper on every external call.** Anthropic, EDGAR, Yahoo, The
-      Graph, the facilitator. Timeouts + bounded retries with jitter + a circuit
-      breaker, behind one small helper so the `Source` Protocol and
-      [buyer/client.py](../src/jim/buyer/client.py) share it. jim already degrades
-      well by *absence* (no key → deterministic fallback, no DB → memory store, no
-      Yahoo → EDGAR-only); this adds degradation by *failure*.
+- [x] **Resilience wrapper (free upstreams).** Done for EDGAR / Yahoo / macro —
+      [net/resilience.py](../src/jim/net/resilience.py): one helper
+      (`resilient_call`) with per-attempt timeout, bounded retries with
+      exponential backoff + jitter, and a per-host circuit breaker with a
+      half-open probe; transport failures retry, semantic errors don't; each
+      source's existing degradation (drop the reading / EdgarError) is
+      preserved. The facilitator's `get_supported()` also degrades to exact-EVM
+      on our network instead of failing 402 issuance. *Still open:* wrapping
+      Anthropic calls and [buyer/client.py](../src/jim/buyer/client.py)'s paid
+      leg (retrying a *payment* needs idempotency first — see the next item).
 - [ ] **Idempotency + settlement reconciliation.** The window between
       `buyer.pay()` settling on-chain and `store.record_purchase()` writing the
       cache is a money-losing failure gap. Add an idempotency key per sell-side
@@ -68,16 +73,19 @@ caller, a key that must rotate.
       a Coinbase CDP server wallet (or KMS-backed signer) behind the existing
       `address`/signer interface in [wallet/](../src/jim/wallet/) and move the spend
       ceiling down into a custody-level policy, not just the app's `BudgetCap`.
-- [ ] **Input hardening.** Validate / canonicalize identifiers before a source
-      fetch so an attacker-controlled `ticker` can't SSRF or path-traverse the
-      EDGAR/Graph calls. Treat all *source text* as untrusted: the gate protects
-      numbers, but the synthesizer prompt ingests source-provided strings — add an
-      injection check so a malicious upstream can't steer the prose (the impersonal
-      guard is a partial backstop; make it explicit).
-- [ ] **Webhook replay protection.** HMAC signing exists in
-      [notify.py](../src/jim/monitors/notify.py); add a timestamp + nonce so a
-      captured delivery can't be replayed, and a dead-letter + retry path for failed
-      pushes (today best-effort log only).
+- [x] **Input hardening (identifiers).** Done —
+      [identifiers.py](../src/jim/research/identifiers.py): allowlist-based
+      `canonicalize(identifier, product)` runs at the top of `run_research`,
+      before any settings/store/source work, so a hostile ticker can't reach
+      URL construction (SSRF/path-traversal defense; per-source validation
+      stays as depth). *Still open:* the source-**text**-as-untrusted injection
+      check for the synthesizer prompt.
+- [x] **Webhook replay protection.** Done — deliveries carry `X-Jim-Timestamp`
+      + `X-Jim-Nonce`, and the HMAC binds both to the body
+      (`sha256(secret, f"{ts}.{nonce}." + body)`); subscriber-side
+      `verify_delivery()` rejects stale timestamps and replayed nonces
+      ([notify.py](../src/jim/monitors/notify.py)). *Still open:* the
+      dead-letter + retry path for failed pushes.
 - [ ] **SLO surface.** Promote [obs/tracing.py](../src/jim/obs/tracing.py) from
       best-effort Langfuse to OpenTelemetry spans + a few real metrics (p99
       latency, gate pass-rate, settlement success rate, margin) so "is jim healthy"
@@ -91,22 +99,27 @@ Goal: jim stops trying to know everything and starts **buying specialized signal
 from other agents**, marking up the synthesis. Full treatment in
 [AGENT_INTEROP.md](AGENT_INTEROP.md); the buildable slice:
 
-- [ ] **Source-as-agent.** A new `Source` that gathers from a *peer research/data
-      agent* over x402 (HTTP or MCP) exactly as `GraphSource` gathers from The
-      Graph — the `Source` Protocol is already transport-agnostic
-      ([ARCHITECTURE §9.3](ARCHITECTURE.md#9-tools-function-tools-and-mcp)). Routes
-      through the same `procure()` → budget → cache path, so spend stays bounded.
-- [ ] **The gate as composition-safety.** When jim ingests another agent's claims,
-      the sourcing gate is what makes them safe to resell: an unverifiable figure
-      from a subcontractor fails the gate just like a hallucination. Add a
-      **per-source trust score = gate pass-rate** and prefer sources whose data jim
-      can actually verify. This is jim's native reputation primitive.
-- [ ] **Cross-agent spend safety.** A single global budget ceiling per request-tree
-      and a **loop detector** (A pays B pays A) so a composed call can't spiral.
-      Extends the propose/dispose `BudgetCap` from per-query to per-call-graph.
-- [ ] **Agent card.** Publish an A2A-style agent card alongside the existing
-      `/.well-known/x402` manifest so peer agents can delegate *tasks* (not just
-      call tools) — see [AGENT_INTEROP §1](AGENT_INTEROP.md).
+- [x] **Source-as-agent.** Done — [peer.py](../src/jim/sources/peer.py):
+      `PeerSource` buys a facts payload (bare or jim-shaped) from a peer over
+      x402 through the same `procure()` → budget → cache path; `CompositeSource`
+      merges peer facts into the product snapshot with renumbered citations +
+      per-fact origins. Peers are config (`PEER_SOURCES`); a mock peer vendor
+      closes the testnet loop. See [ADR-0008](adr/0008-agent-economy-trust-callchain-billing.md).
+- [x] **The gate as composition-safety.** Done — every gated run attributes its
+      outcome to the sources whose facts it used
+      ([interop/trust.py](../src/jim/interop/trust.py)); the Laplace-smoothed
+      pass-rate is the trust score (`source_trust_events` ledger, surfaced on
+      the dashboard), and the buy path refuses peers below `PEER_TRUST_FLOOR`.
+- [x] **Cross-agent spend safety.** Done — buys carry `X-Jim-Call-Chain`
+      ([interop/callchain.py](../src/jim/interop/callchain.py)); the seller
+      refuses loops and over-depth chains with 409 *before* the paywall, and
+      the buyer never extends a chain past `CALL_CHAIN_MAX_DEPTH`. (A shared
+      request-tree *budget* — beyond depth — stays open; today each hop's
+      per-query `BudgetCap` bounds it.)
+- [x] **Agent card.** Done — `GET /.well-known/agent-card.json`
+      ([agentcard.py](../src/jim/marketplace/agentcard.py)) derives skills from
+      the catalog, binds x402 payment details, states the trust/call-chain
+      contract, and is linked from the `/.well-known/x402` manifest.
 
 ---
 

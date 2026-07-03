@@ -27,6 +27,7 @@ from jim.monitors.models import Monitor, MonitorRun
 from jim.monitors.notify import build_channels, build_payload, deliver_all
 from jim.monitors.triggers import evaluate_all
 from jim.monitors.update import synthesize_update
+from jim.net import CircuitOpen
 from jim.research.budget import BudgetCap
 from jim.research.edgar import EdgarError
 from jim.research.products import get_product, usd
@@ -77,10 +78,20 @@ async def run_monitor_once(
             budget=BudgetCap(ceiling_usd=settings.per_query_budget_usd),
             store=store,
         )
-    except (EdgarError, BudgetExceeded, ProcurementError, ValueError, httpx.HTTPError) as e:
-        # httpx errors matter for monitors specifically: continuous polling will
-        # eventually hit a transient SEC/feed 429/503 or a network blip. Catch it
-        # so the run is recorded as an error AND still reschedules (no hot-loop).
+    except (
+        EdgarError,
+        BudgetExceeded,
+        ProcurementError,
+        ValueError,
+        httpx.HTTPError,
+        TimeoutError,
+        CircuitOpen,
+    ) as e:
+        # Transport-level errors matter for monitors specifically: continuous
+        # polling will eventually hit a transient SEC/feed 429/503, a network
+        # blip, the resilience wrapper's wall-clock timeout, or an open circuit
+        # breaker. Catch them so the run is recorded as an error AND still
+        # reschedules (no hot-loop).
         run.status = "error"
         run.error = str(e)
         await _finalize(monitor, run, store, now, settings, roll_baseline=False, persist=persist)

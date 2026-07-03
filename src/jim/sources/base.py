@@ -8,7 +8,7 @@ the budget and uses the cache so we buy a datum once and reuse it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Protocol
 
 from jim.research.budget import BudgetCap
@@ -21,6 +21,10 @@ class GatherResult:
     snapshot: Snapshot
     cost_in_usd: float
     cache_hit: bool
+    # Phase 7: human-readable sourcing notes ("peer:x — skipped: below trust
+    # floor"), surfaced in the response's cost block so a composed gather is
+    # auditable without digging through logs.
+    notes: list[str] = field(default_factory=list)
 
 
 class BudgetExceeded(RuntimeError):
@@ -82,6 +86,7 @@ async def procure(
     # advertises in its 402. Pass the real remaining ceiling so an over-cap price is
     # refused before settlement — the deterministic guard against dynamic x402 pricing.
     from jim.buyer.client import PriceCapExceeded
+    from jim.interop.callchain import CallChainDepthExceeded
 
     try:
         resp = await buy_fn(
@@ -91,7 +96,8 @@ async def procure(
             private_key=private_key,
             max_price_usd=budget.remaining_usd,
         )
-    except PriceCapExceeded as e:
+    except (PriceCapExceeded, CallChainDepthExceeded) as e:
+        # Both are deterministic refusals to spend, made before any settlement.
         raise BudgetExceeded(str(e)) from e
     if resp.status_code != 200:
         raise ProcurementError(f"{source_name} returned HTTP {resp.status_code}: {resp.text[:200]}")

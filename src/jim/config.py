@@ -174,6 +174,25 @@ class Settings(BaseSettings):
     mcp_host: str = "0.0.0.0"
     mcp_port: int = 4022
 
+    # --- Phase 7: agent-to-agent sourcing (peers, trust, call-chain) --------
+    # Peer agents jim buys signals from, as a JSON list:
+    #   [{"name":"sentiment-alpha","url":"https://peer.example/signals",
+    #     "identifier_param":"identifier","price_estimate_usd":0.02,
+    #     "products":["fundamentals","token"]}]
+    # Each peer becomes a Source composed into the named products (all when
+    # omitted), buying through the same procure() → budget → cache path as The
+    # Graph. See jim.sources.peer / ADR-0008.
+    peer_sources: str | None = None
+    # Trust routing: refuse to pay a peer whose gate pass-rate (Laplace-smoothed)
+    # fell below the floor, once we have at least min_events observations.
+    peer_trust_floor: float = 0.4
+    peer_trust_min_events: int = 3
+    # Cross-agent spend safety: the propagated X-Jim-Call-Chain is refused at
+    # this depth (sell side) and never extended past it (buy side).
+    call_chain_max_depth: int = 4
+    # Local mock peer vendor (testnet stand-in for a paid peer agent).
+    mock_peer_price: str = "$0.01"
+
     # Mainnet cutover guardrails. An optional read-only RPC lets the readiness
     # preflight report on-chain ETH/USDC balances; everything else is offline.
     mainnet_rpc_url: str | None = Field(default=None, description="Read-only Base RPC for balances")
@@ -181,6 +200,18 @@ class Settings(BaseSettings):
     # the free testnet facilitator and a production facilitator differ).
     facilitator_min_usdc: float = 0.0  # smallest settleable amount, if any
     facilitator_fee_bps: float = 0.0  # facilitator fee in basis points, if any
+
+    # --- Phase 6: resilience (timeouts, retries, circuit breaker) -----------
+    # Every free upstream fetch (EDGAR, Yahoo, macro) runs through
+    # jim.net.resilience.resilient_call: a wall-clock timeout per attempt,
+    # bounded retries with exponential backoff + jitter on transport failures,
+    # and a per-host circuit breaker that fails fast once a host looks down.
+    # HTTP 4xx/5xx are never retried — they're semantic, and sources already
+    # handle them. See jim.net.resilience.default_policy().
+    resilience_timeout_seconds: float = 20.0
+    resilience_retries: int = 2
+    resilience_breaker_threshold: int = 5
+    resilience_breaker_reset_seconds: float = 30.0
 
     @property
     def is_mainnet(self) -> bool:

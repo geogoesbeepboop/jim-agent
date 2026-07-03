@@ -16,17 +16,21 @@ beyond Phase 5; **[docs/ENTERPRISE_VISION.md](docs/ENTERPRISE_VISION.md)** is th
 **[docs/AGENT_INTEROP.md](docs/AGENT_INTEROP.md)** covers whether and how jim should
 talk to other agents.
 
-> **Status: Phase 5 — marketplace, discovery, mainnet.** jim is now
-> machine-discoverable: each paid route advertises **Bazaar** metadata (so the
-> first settlement auto-indexes us), a deterministic **`/.well-known/x402`**
-> manifest + `/catalog` + `/pricing` describe every product, and jim is exposed as
-> an **x402-gated MCP server** (`jim-mcp`). A thin **human UI** (`GET /`) pays via
-> x402 under the hood, a **live system map** (`jim-map` / `GET /map`) renders the
-> whole system from the running config, and a read-only **mainnet preflight**
-> (`jim-market mainnet`) guards the cutover to real USDC — it never moves money.
-> Phases 0–4 (payment rail; cited EDGAR fundamentals + sourcing gate; two-sided
-> buy + margin engine; bull/bear/judge debate + expanded metrics + regression
-> eval; continuous monitors with a deterministic materiality gate) are done.
+> **Status: Phase 7 — the agent economy (+ Track 0 & Phase 6 hardening).** jim
+> now **composes peer agents**: a `PeerSource` buys cited signals from other
+> x402 agents through the same budget/cache path as The Graph, the sourcing
+> gate verifies their figures like everything else (the composition firewall),
+> a **trust ledger** scores every source by its gate pass-rate and refuses
+> peers that stop verifying, and a propagated **`X-Jim-Call-Chain`** refuses
+> payment loops / over-depth request trees before any money moves. An
+> **A2A agent card** (`/.well-known/agent-card.json`) makes jim delegable, not
+> just callable. The gate itself is now **fuzz-hardened** (Hypothesis) against
+> exotic number renderings, and the seller enforces a new billing invariant:
+> **gate-rejected research is refused, never billed** (see ADR-0008 — the fix
+> for our first mainnet settlement, which charged for a rejected memo).
+> Phases 0–5 (payment rail; cited EDGAR fundamentals + sourcing gate; two-sided
+> buy + margin engine; debate + metrics + regression eval; monitors with a
+> deterministic materiality gate; marketplace, discovery, mainnet) are done.
 
 ## Layout
 
@@ -47,9 +51,13 @@ src/jim/
     products.py         # registry: fundamentals→EDGAR, token→The Graph
     engine.py           # LangGraph: gather → memo-cache → synthesize → gate(retry) → judge
   eval/rubric.py        # weighted "better output" score (sourcing+completeness+…)
+  interop/              # Phase 7: the seam between agents (model proposes, code disposes)
+    callchain.py        # X-Jim-Call-Chain: loop + depth refusal BEFORE any payment
+    trust.py            # per-source trust = gate pass-rate (reputation by verification)
   sources/              # Source interface: EDGAR + macro (free) · The Graph (paid x402)
     thegraph.py         # multi-chain Uniswap-v3 (ETH/Base/Arbitrum/Polygon) over x402
     macro.py            # free public-domain macro: Fed funds · CPI · Treasury yields
+    peer.py             # Phase 7: buy cited signals from PEER AGENTS over x402 + compose
   monitors/             # Phase 4: scheduled diff-driven monitors (the "motley crew")
     diff.py             # deterministic snapshot diffing (baseline → fresh)
     triggers.py         # the crew: price/threshold/MA-cross/new-filing watchers
@@ -82,6 +90,7 @@ scripts/
   research_demo.py      # Phase 1: pay for a fundamentals memo, print it
   precompute.py         # Phase 2: warm the cache for popular tokens
   graph_probe.py        # Phase 2: decode the Graph 402 (live vs mock) before paying
+  peer_demo.py          # Phase 7: jim subcontracts a peer agent over x402, gate-verified
 tests/                  # offline proofs: payment, gate, graph logic, budget, margin
 docker-compose.yml      # local Postgres + pgvector
 ```
@@ -171,7 +180,8 @@ uv run jim-research AAPL --no-cache       # force a fresh synthesis
 uv run jim-research NVDA --high-stakes    # upgrade the faithfulness judge to Sonnet
 uv run jim-eval AAPL MSFT                 # report now includes material coverage + composite rubric
 ```
-> New table: run `uv run jim-initdb` once to create `memo_cache`.
+> New tables: run `uv run jim-initdb` once to create `memo_cache` (and, for
+> Phase 7, `source_trust_events`) — a no-op for tables that already exist.
 
 ## Two-sided + margin (Phase 2)
 
@@ -301,6 +311,49 @@ can't spend; the buy leg has been mainnet-capable since Phase 2 (`GRAPH_LIVE`). 
 **[docs/SYSTEM_MAP.md](docs/SYSTEM_MAP.md)**, [ADR-0003](docs/adr/0003-bazaar-discovery.md),
 and [ADR-0004](docs/adr/0004-mainnet-cutover-and-ui-self-pay.md).
 
+## The agent economy (Phase 7): peers, trust, call-chain safety
+
+jim is now a **general contractor**: it can buy specialized, cited signals from
+peer agents over x402, verify them with the same sourcing gate that guards its
+own prose, and resell the composed synthesis. See
+[ADR-0008](docs/adr/0008-agent-economy-trust-callchain-billing.md) and
+[docs/AGENT_INTEROP.md](docs/AGENT_INTEROP.md).
+
+```bash
+# Configure peers (JSON env). Each becomes a Source composed into the named
+# products, buying through the same procure() → budget → cache path as The Graph.
+PEER_SOURCES='[{"name":"mock-sentiment",
+                "url":"http://localhost:4021/mock-peer/research",
+                "price_estimate_usd":0.01,
+                "products":["fundamentals"]}]'
+
+uv run jim-seller               # also serves the mock peer vendor (testnet stand-in)
+uv run jim-research AAPL        # the memo can now cite peer facts — gate-verified
+uv run jim-dashboard            # + per-source trust: gate pass-rate as reputation
+uv run jim-market agent-card    # the A2A card peers use to delegate tasks to jim
+```
+
+Three deterministic guards make composition safe (model proposes, code disposes):
+
+- **The gate is the firewall.** A peer's figure must match its cited fact like
+  any EDGAR number — jim can buy from agents it does not trust and still only
+  ship what it can verify.
+- **Trust = verification.** Every gated run credits/debits the sources whose
+  facts it used; the Laplace-smoothed pass-rate is the score. Peers below
+  `PEER_TRUST_FLOOR` are refused *before* payment. No reviews, no ratings —
+  outcomes jim observed itself.
+- **The call chain is bounded.** Buys carry `X-Jim-Call-Chain`; the seller
+  refuses payment loops (our address already in the chain) and over-depth
+  trees with a 409 **before** the paywall verifies anything.
+
+## Billing invariant: rejected research is never billed
+
+The x402 middleware only settles 2xx responses — so the seller now *refuses*
+gate-rejected runs (HTTP 502 + diagnostics, MCP tool error, UI "not billed"
+notice), which cancels the verified payment. The engine books rejected runs at
+$0 revenue, so `/dashboard` shows the true loss. This closes the incident from
+our first mainnet settlement, where a rejected COIN memo settled anyway.
+
 ## Payments: audit log, admin dashboard & browser wallets
 
 Every x402 payment that settles at the paywall is recorded as an **on-chain audit
@@ -353,6 +406,15 @@ uv run pytest          # all offline, no wallet/network/API key/DB:
                        #  · data sources: multi-chain token resolve + cache isolation,
                        #    free macro source (cited gov data, 2s10s, degrades),
                        #    dynamic-price cap guard (refuses over-budget x402 price)
+                       #  · gate fuzzing (Track 0): Hypothesis property suite — no
+                       #    fabricated figure passes (sci notation, "5 billion", 5B,
+                       #    spelled-out, ranges...), no formatter-true figure rejects
+                       #  · billing invariant: rejected runs refused (502 + diagnostics,
+                       #    payment cancelled), $0 revenue booked, preview refuses too
+                       #  · agent economy (Phase 7): peer facts → cited snapshot via
+                       #    budget/cache, purchase cache, trust-floor refusal, composite
+                       #    merge + origins, gate-as-firewall, outcome attribution,
+                       #    trust ledger, call-chain codec + 409 loop/depth refusals
 ```
 
 > Tests are hermetic by design (a `conftest.py` neutralises `DATABASE_URL` /

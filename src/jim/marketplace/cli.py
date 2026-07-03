@@ -3,6 +3,7 @@
     uv run jim-market catalog       # what jim sells (routes, prices, tiers, sources)
     uv run jim-market pricing        # the published pricing schedule
     uv run jim-market manifest       # the /.well-known/x402 discovery manifest (JSON)
+    uv run jim-market agent-card     # the A2A agent card (JSON)
     uv run jim-market mainnet        # the mainnet-cutover readiness preflight
 
 The companion ``jim-map`` renders the live system diagram; ``jim-mcp`` runs the
@@ -17,6 +18,7 @@ import json
 import sys
 
 from jim.config import get_settings
+from jim.marketplace.agentcard import agent_card
 from jim.marketplace.catalog import build_catalog
 from jim.marketplace.discovery import discovery_manifest
 from jim.marketplace.mainnet import check_mainnet_readiness
@@ -55,6 +57,11 @@ def _manifest() -> int:
     return 0
 
 
+def _agent_card() -> int:
+    print(json.dumps(agent_card(), indent=2))
+    return 0
+
+
 async def _mainnet() -> int:
     readiness = await check_mainnet_readiness()
     print(f"Mainnet readiness — network {readiness.network}  "
@@ -78,6 +85,7 @@ def main() -> int:
     sub.add_parser("catalog", help="List products (routes, prices, tiers, sources)")
     sub.add_parser("pricing", help="Published pricing schedule")
     sub.add_parser("manifest", help="Discovery manifest JSON (/.well-known/x402)")
+    sub.add_parser("agent-card", help="A2A agent card JSON (/.well-known/agent-card.json)")
     sub.add_parser("mainnet", help="Mainnet-cutover readiness preflight")
     args = p.parse_args()
 
@@ -87,6 +95,8 @@ def main() -> int:
         return _pricing()
     if args.cmd == "manifest":
         return _manifest()
+    if args.cmd == "agent-card":
+        return _agent_card()
     if args.cmd == "mainnet":
         return asyncio.run(_mainnet())
     return 1

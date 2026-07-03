@@ -27,6 +27,8 @@ from jim.research.debate import run_debate
 from jim.research.facts import Snapshot
 from jim.research.gate import GateResult, check_sourcing
 from jim.research.judge import JudgeResult, judge_faithfulness
+from jim.interop.trust import attribute_gate_outcome
+from jim.research.identifiers import canonicalize
 from jim.research.products import get_product
 from jim.research.edgar import EdgarError
 from jim.research.synthesize import synthesize
@@ -62,6 +64,7 @@ class EngineState(TypedDict, total=False):
     memo_cache_ttl: int
     high_stakes: bool
     served_from_cache: bool
+    sourcing_notes: list[str]
 
 
 @dataclass
@@ -106,6 +109,7 @@ async def _gather(state: EngineState) -> dict:
         "snapshot": result.snapshot,
         "cost_in_data": result.cost_in_usd,
         "cache_hit": result.cache_hit,
+        "sourcing_notes": list(result.notes),
     }
 
 
@@ -250,6 +254,14 @@ async def run_research(
         high_stakes: upgrade the faithfulness judge to the stronger model.
         use_memo_cache: override the memo cache (eval A/B disables it). None = config.
     """
+    # Canonicalize before anything else: a hostile identifier is refused here,
+    # before it can reach a source fetch, a store key, or the graph at all.
+    try:
+        identifier = canonicalize(identifier, product)
+    except ValueError as e:
+        return ResearchResult(
+            ticker=identifier[:40], mode=mode, status="error", product=product, error=str(e)
+        )
     settings = get_settings()
     debate_on = settings.enable_debate if enable_debate is None else enable_debate
     memo_cache_on = settings.memo_cache_enabled if use_memo_cache is None else use_memo_cache
@@ -294,7 +306,10 @@ async def run_research(
         cache_hit = bool(final.get("cache_hit", False))
         served_from_cache = bool(final.get("served_from_cache", False))
         inference_cost = round(ledger.inference_cost_usd, 6)
-        margin = round(spec.price_out_usd - cost_in_data - inference_cost, 6)
+        # Rejected/errored runs are refused (never settled), so they earn $0 —
+        # the margin ledger must show the loss, not phantom revenue.
+        price_out = spec.price_out_usd if status == "ok" else 0.0
+        margin = round(price_out - cost_in_data - inference_cost, 6)
 
         # Completeness: what material facts did the memo leave out? (signal, not gate)
         memo = final.get("memo")
@@ -309,11 +324,13 @@ async def run_research(
             "output_tokens": ledger.output_tokens,
             "inference_cost_usd": inference_cost,
             "data_cost_usd": round(cost_in_data, 6),
-            "price_out_usd": spec.price_out_usd,
+            "price_out_usd": price_out,
             "margin_usd": margin,
             "cache_hit": cache_hit,
             "served_from_cache": served_from_cache,
         }
+        if final.get("sourcing_notes"):
+            cost["sourcing_notes"] = list(final["sourcing_notes"])
         if completeness is not None:
             cost["completeness"] = round(completeness.coverage, 4)
             cost["material_coverage"] = round(completeness.material_coverage, 4)
@@ -339,14 +356,28 @@ async def run_research(
             },
         )
 
-    # Persist economics + insight (billable runs only contribute to margin).
+    # Trust ledger (Phase 7): attribute this run's gate outcome to the sources
+    # whose facts it used — the pass-rate is each source's reputation. Cached
+    # runs are skipped (their outcome was already attributed when synthesized).
+    if snapshot is not None and gate is not None and not served_from_cache:
+        verdicts = attribute_gate_outcome(snapshot, gate, default_source=spec.source.name)
+        for src, passed_flag in verdicts.items():
+            try:
+                await store.record_trust_event(
+                    source=src, ok=passed_flag, context=f"{product}:{identifier.upper()}"
+                )
+            except Exception:
+                pass  # trust is a signal, never a reason to fail a run
+
+    # Persist economics + insight. Rejected runs record their true cost at $0
+    # revenue (they are refused before settlement — see _deliver_or_refuse).
     if status in ("ok", "rejected"):
         await store.record_query(
             product=product,
             identifier=identifier.upper(),
             mode=mode,
             status=status,
-            price_out_usd=spec.price_out_usd,
+            price_out_usd=price_out,
             cost_in_data_usd=cost_in_data,
             cost_inference_usd=inference_cost,
             cache_hit=cache_hit,

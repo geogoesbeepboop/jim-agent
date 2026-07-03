@@ -60,6 +60,22 @@ async def _checkout_direct(product: str, identifier: str, mode: str, price_usd: 
     result = await run_research(identifier, product=product, mode=mode)
     if result.status == "error":
         return {"ok": False, "error": result.error, "settled_via": "direct"}
+    if result.status != "ok":
+        # Same refusal the paid routes make: never show unverified output, even
+        # in a free preview. (Paid callers additionally keep their money.)
+        gate = result.gate
+        coverage = f"{gate.n_covered}/{gate.n_figures} figures verified" if gate else "no gate run"
+        return {
+            "ok": False,
+            "rejected": True,
+            "billed": False,
+            "settled_via": "direct",
+            "error": (
+                f"jim's verification gates rejected this run after "
+                f"{result.attempts} attempt(s) ({coverage}) — nothing shipped. "
+                "A fresh attempt may succeed."
+            ),
+        }
     return {
         "ok": True,
         "paid": False,
@@ -80,9 +96,30 @@ async def _checkout_via_x402(
     url = f"{settings.public_url}{path}?{param}={identifier}&mode={mode}"
     resp = await pay(url, method="GET")
     if resp.status_code != 200:
-        # The seller's 402 body is empty on a failed settlement; the real reason
-        # (insufficient funds, facilitator auth, etc.) rides in the PAYMENT-RESPONSE
-        # header instead, which `pay()` already decoded into `resp.settlement`.
+        # A 502 with our refusal shape means the *research* was rejected — the
+        # verified payment was cancelled, so the buyer was not billed.
+        refusal = _refusal_detail(resp)
+        if refusal is not None:
+            src = refusal.get("sourcing") or {}
+            coverage = (
+                f"{src.get('figures_covered', 0)}/{src.get('figures_checked', 0)} "
+                "figures verified"
+            )
+            return {
+                "ok": False,
+                "rejected": True,
+                "billed": False,
+                "settled_via": "x402",
+                "error": (
+                    f"jim's verification gates rejected this run ({coverage}) — "
+                    "nothing shipped, and the payment was NOT settled. "
+                    "A fresh attempt may succeed."
+                ),
+            }
+        # Otherwise the settlement itself failed. The seller's 402 body is empty
+        # on a failed settlement; the real reason (insufficient funds, facilitator
+        # auth, etc.) rides in the PAYMENT-RESPONSE header instead, which `pay()`
+        # already decoded into `resp.settlement`.
         detail = ""
         if resp.settlement:
             reason = resp.settlement.get("error_reason")
@@ -97,6 +134,18 @@ async def _checkout_via_x402(
         "price_usd": resp.cost_in_usd or get_product(path.rsplit("/", 1)[-1]).price_out_usd,
         "result": resp.json(),
     }
+
+
+def _refusal_detail(resp) -> dict | None:
+    """The structured refusal a research route returns for a gate-rejected run
+    (see ``_deliver_or_refuse`` in the seller), or None for other failures."""
+    try:
+        detail = resp.json().get("detail")
+    except Exception:
+        return None
+    if isinstance(detail, dict) and detail.get("status") == "rejected":
+        return detail
+    return None
 
 
 def storefront_html(settings: Settings | None = None) -> str:
@@ -241,17 +290,22 @@ document.getElementById('wallet').addEventListener('click', () => {{
 }});
 
 function render(data) {{
-  if (!data.ok) return '<div class="card"><span class="pill bad">rejected</span> ' + (data.error||'failed') + '</div>';
+  if (!data.ok) {{
+    // A gate refusal is jim working as designed: nothing shipped, nothing billed.
+    if (data.rejected) return '<div class="card"><span class="pill bad">research rejected</span> ' +
+      '<span class="pill tag">not billed</span><div style="margin-top:8px">' + (data.error||'') + '</div></div>';
+    return '<div class="card"><span class="pill bad">error</span> ' + (data.error||'failed') + '</div>';
+  }}
   const res = data.result || {{}};
   const src = res.sourcing || {{}};
   const cost = res.cost || {{}};
   const paid = data.paid ? '<span class="pill ok">paid · x402</span>' : '<span class="pill ok">preview · free</span>';
+  const verified = '<span class="pill ok">gate-verified</span>';
   const tx = data.tx_hash ? '<span class="muted">tx ' + data.tx_hash.slice(0,12) + '…</span>' : '';
   const cites = (res.citations||[]).slice(0,8).map(c =>
     '[' + c.id + '] ' + c.label + ' = ' + c.value + ' ' + (c.unit||'')).join(' · ');
   return '<div class="card">' +
-    '<div>' + paid + ' <b>' + (res.company || res.ticker || '') + '</b> ' +
-      '<span class="muted">status ' + (res.status||'') + '</span> ' + tx + '</div>' +
+    '<div>' + paid + verified + ' <b>' + (res.company || res.ticker || '') + '</b> ' + tx + '</div>' +
     '<div class="memo" style="margin-top:12px">' + (res.memo || '(no memo)') + '</div>' +
     '<div class="cite">Sourcing: ' + (src.passed ? 'PASS' : 'FAIL') + ' — ' +
       (src.figures_covered||0) + '/' + (src.figures_checked||0) + ' figures · ' +

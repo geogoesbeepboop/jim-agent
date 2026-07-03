@@ -128,6 +128,13 @@ def _register_tool(mcp, wrapper, listing: Listing, run_research, ResearchRespons
     @wrapper
     async def _tool(identifier: str, mode: str = "human") -> str:
         result = await run_research(identifier, product=product, mode=mode)
+        if result.status != "ok":
+            # Mirror the HTTP seller's billing invariant: a rejected/errored run
+            # raises, the payment wrapper never settles, the buyer isn't billed.
+            raise ValueError(
+                f"research {result.status}: jim refused to ship unverified output "
+                f"({result.error or 'sourcing/faithfulness gate rejection'}); you were not billed."
+            )
         return json.dumps(ResearchResponse.from_result(result).model_dump(), default=str)
 
     # Make the parameter name match the product's identifier (ticker/token).

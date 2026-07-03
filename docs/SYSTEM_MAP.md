@@ -302,6 +302,37 @@ flowchart LR
 
 ---
 
+## 6b. The agent economy (Phase 7)
+
+jim as a **general contractor**: peers are just Sources, the gate is the
+composition firewall, trust is the gate pass-rate, and the call chain bounds
+cross-agent spend. See [ADR-0008](adr/0008-agent-economy-trust-callchain-billing.md)
+and [AGENT_INTEROP.md](AGENT_INTEROP.md).
+
+```mermaid
+flowchart TD
+  orch["Orchestrator agent<br/>(pays jim over x402)"]:::ext -->|"X-Jim-Call-Chain"| ccm{"call-chain middleware<br/>loop? too deep? → 409<br/>(before the paywall)"}:::gate
+  ccm -->|sane chain| pw["x402 paywall → engine"]
+  pw --> comp["CompositeSource"]
+  comp --> prim["primary Source<br/>(EDGAR / Graph / macro)"]
+  comp --> tf{"trust floor<br/>pass-rate ≥ PEER_TRUST_FLOOR?"}:::gate
+  tf -->|yes| peer["PeerSource → procure()<br/>budget cap + price cap + cache"]
+  tf -->|"no — refuse to pay"| skip["skipped (sourcing note)"]:::bad
+  peer -->|"cited facts (+ origins)"| merge["merged Snapshot"]
+  prim --> merge
+  merge --> sg{"sourcing gate<br/>(the composition firewall)"}:::gate
+  sg -->|pass| ship["cited memo ships<br/>+ ok trust events per source"]:::ok
+  sg -->|fail| refuse["502 refusal — NOT billed<br/>+ fail trust events (implicated sources)"]:::bad
+  refuse -.->|"pass-rate decays"| tf
+
+  classDef ext fill:#e1f5fe,stroke:#0277bd,color:#01579b;
+  classDef gate fill:#fce4ec,stroke:#c2185b,color:#880e4f;
+  classDef ok fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20;
+  classDef bad fill:#ffebee,stroke:#c62828,color:#b71c1c;
+```
+
+---
+
 ## 7. Monitor lifecycle (Phase 4 recap)
 
 A monitor turns a one-shot call into a standing one — deterministic detection,
@@ -336,8 +367,9 @@ flowchart LR
   p2 --> p3["Phase 3<br/>debate + metrics + evals"]
   p3 --> p4["Phase 4<br/>continuous monitors"]
   p4 --> p5["Phase 5<br/>marketplace · discovery · MCP · mainnet"]
+  p5 --> p7["Phase 7 (+6 slices)<br/>agent economy: peers · trust · call chain<br/>gate fuzzing · billing invariant"]
   classDef done fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20;
-  class p0,p1,p2,p3,p4,p5 done;
+  class p0,p1,p2,p3,p4,p5,p7 done;
 ```
 
 ---

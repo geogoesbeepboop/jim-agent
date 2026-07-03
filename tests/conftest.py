@@ -20,9 +20,12 @@ import os
 # Env vars win over .env in pydantic-settings, so an empty value here overrides a
 # developer's .env. Empty DATABASE_URL is falsy → get_store() picks MemoryStore.
 os.environ["DATABASE_URL"] = ""
-os.environ.pop("ANTHROPIC_API_KEY", None)
 # Empty (not popped) — pydantic-settings prefers a real os.environ value over
-# .env, but an *absent* key still falls through to .env's real CDP creds. An
-# empty string is a present-but-falsy override, so it actually neutralizes them.
+# .env, but an *absent* key still falls through to .env's real value. An empty
+# string is a present-but-falsy override, so it actually neutralizes them.
+os.environ["ANTHROPIC_API_KEY"] = ""
 os.environ["CDP_API_KEY_ID"] = ""
 os.environ["CDP_API_KEY_SECRET"] = ""
+# A developer's configured peer agents (Phase 7) must not leak into the suite —
+# tests construct their own PeerSpec/PeerSource explicitly.
+os.environ["PEER_SOURCES"] = ""
