@@ -208,7 +208,7 @@ def storefront_html(settings: Settings | None = None) -> str:
   <h1>{s.service_name} — cited financial research</h1>
   <p>{s.service_description}</p>
   <nav>
-    <a href="/catalog">catalog</a><a href="/pricing">pricing</a>
+    <a href="/proof">proof</a><a href="/catalog">catalog</a><a href="/pricing">pricing</a>
     <a href="/map">system map</a><a href="/dashboard">margin</a>
     <a href="/admin">admin</a><a href="/.well-known/x402">discovery</a>
   </nav>

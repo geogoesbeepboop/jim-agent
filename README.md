@@ -10,11 +10,15 @@ works (pipeline, sources, the gate, payments, tools/MCP, evals), and
 **[docs/SYSTEM_MAP.md](docs/SYSTEM_MAP.md)** for the system visualized end-to-end
 in Mermaid (or run `uv run jim-map` for your live config).
 
-Looking forward: **[docs/ROADMAP.md](docs/ROADMAP.md)** is the buildable backlog
-beyond Phase 5; **[docs/ENTERPRISE_VISION.md](docs/ENTERPRISE_VISION.md)** is the
-"how I'd scale this at Stripe / VISA / Coinbase" thinking; and
-**[docs/AGENT_INTEROP.md](docs/AGENT_INTEROP.md)** covers whether and how jim should
-talk to other agents.
+Looking forward: **[docs/NORTH_STAR.md](docs/NORTH_STAR.md)** is the strategy —
+jim as the *verifiable delivery* layer of agentic commerce — with
+**[docs/DEPLOY.md](docs/DEPLOY.md)** (the go-live runbook) and
+**[docs/LAUNCH.md](docs/LAUNCH.md)** (the demo + listings kit) as its Horizon 1
+arms; **[docs/ROADMAP.md](docs/ROADMAP.md)** is the buildable backlog;
+**[docs/ENTERPRISE_VISION.md](docs/ENTERPRISE_VISION.md)** is the "how I'd scale
+this at Stripe / VISA / Coinbase" thinking; and
+**[docs/AGENT_INTEROP.md](docs/AGENT_INTEROP.md)** covers whether and how jim
+should talk to other agents.
 
 > **Status: Phase 7 — the agent economy (+ Track 0 & Phase 6 hardening).** jim
 > now **composes peer agents**: a `PeerSource` buys cited signals from other
@@ -353,6 +357,32 @@ gate-rejected runs (HTTP 502 + diagnostics, MCP tool error, UI "not billed"
 notice), which cancels the verified payment. The engine books rejected runs at
 $0 revenue, so `/dashboard` shows the true loss. This closes the incident from
 our first mainnet settlement, where a rejected COIN memo settled anyway.
+
+## Go live: the proof page, receipts & identity (Horizon 1)
+
+The outward-facing layer — see [docs/NORTH_STAR.md](docs/NORTH_STAR.md) for why.
+
+```bash
+uv run jim-seller
+#   GET /proof        → the public proof page: live settlements (tx links), gate
+#                       pass-rate, source-trust table, and money REFUSED because
+#                       verification failed — radical transparency, reproducible
+#                       from the store (GET /proof.json for machines)
+
+uv run jim-identity card       # the ERC-8004-shaped identity payload (offline)
+uv run jim-identity register   # prepares the onchain registration — NEVER sends;
+                               # the operator executes it (guarded by design)
+uv run jim-identity attest AAPL   # run + sign a gate-verdict receipt: memo hash →
+                                  # fingerprint → verdict → settlement, EIP-191
+uv run jim-identity verify receipt.json   # anyone can verify offline
+
+docker build -t jim .          # the deployable seller (docs/DEPLOY.md runbook)
+```
+
+A rejected run is never attested and never billed — receipts only exist for
+research the gate verified. The three-minute demo script (including the
+lying-peer trust-decay beat, `MOCK_PEER_CORRUPT=true`) lives in
+[docs/LAUNCH.md](docs/LAUNCH.md).
 
 ## Payments: audit log, admin dashboard & browser wallets
 

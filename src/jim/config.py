@@ -190,8 +190,19 @@ class Settings(BaseSettings):
     # Cross-agent spend safety: the propagated X-Jim-Call-Chain is refused at
     # this depth (sell side) and never extended past it (buy side).
     call_chain_max_depth: int = 4
-    # Local mock peer vendor (testnet stand-in for a paid peer agent).
+    # Local mock peer vendor (testnet stand-in for a paid peer agent). Corrupt
+    # mode makes it return unusable rows — the lying-peer beat of the demo:
+    # jim refuses the payload, debits the peer's trust, and (after
+    # PEER_TRUST_MIN_EVENTS) stops buying from it entirely.
     mock_peer_price: str = "$0.01"
+    mock_peer_corrupt: bool = False
+
+    # --- Horizon 1: onchain identity (ERC-8004) -----------------------------
+    # The ERC-8004 Identity Registry address for our network. Deliberately no
+    # default: verify the canonical address against the spec before setting it
+    # (https://eips.ethereum.org/EIPS/eip-8004). `jim-identity register`
+    # prepares the registration but never sends it — the operator executes.
+    erc8004_identity_registry: str | None = None
 
     # Mainnet cutover guardrails. An optional read-only RPC lets the readiness
     # preflight report on-chain ETH/USDC balances; everything else is offline.
