@@ -26,3 +26,6 @@ build/
 
 # Generated artifacts (regenerate with `uv run jim-map --format html -o map.html`)
 map.html
+
+# Persisted eval runs (machine-local history; see docs/adr/0009)
+eval_runs/

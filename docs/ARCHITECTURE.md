@@ -428,15 +428,38 @@ Every Langfuse call is guarded so tracing can never break a run.
 
 ## 11. Evals
 
-[eval/](../src/jim/eval/), run via `jim-eval`.
+[eval/](../src/jim/eval/), run via `jim-eval` — the harness that answers "is
+jim improving?" with persisted, comparable numbers. See
+[ADR-0009](adr/0009-eval-harness-persisted-runs-tiered-suites.md).
 
-- **Gate regression** (offline, no key): planted memos the gate *must* reject
-  (dollar/RSI hallucinations, uncited, phantom) plus a clean memo it must pass.
-  This is the merge gate — deterministic and always runnable.
-- **Lift comparison** (live): each held-out ticker is run **single-pass** and
-  **with debate**; the harness compares gate pass-rate, coverage, faithfulness,
-  and fact count, and logs aggregates to Langfuse. This answers Phase 3's
-  question — does adversarial review measurably help vs. the Phase-1 single pass?
+Four suites, cheapest first; the offline three are deterministic, need no key,
+and gate merges (any failing case exits 1):
+
+- **gate** (offline): 38 labeled memos covering the extractor's whole surface —
+  for every notation the gate understands, a truthful phrasing it must pass and
+  a planted lie it must reject. A regression in either direction is a named case.
+- **guards** (offline): 40 cases over the other deterministic rails — the
+  impersonal guard, identifier canonicalization (hostile input must refuse),
+  the completeness check, monitor materiality (floors + cooldowns), and the
+  monitor-NL propose/dispose validation (unknown kinds dropped, params clamped).
+- **scenarios** (offline): the real LangGraph engine end-to-end with scripted
+  I/O seams (fake source, scripted synthesizer, in-memory store). Pins the
+  retry loop, the memo cache, fail-closed error paths, margin accounting, and
+  the **never-bill-rejected invariant asserted at the ledger** (ADR-0008).
+- **live** (needs `ANTHROPIC_API_KEY`): held-out tickers through the real
+  pipeline, **single-pass vs debate** (memo cache off), each run scored by the
+  ADR-0006 rubric and measured for latency, tokens, and $ cost; `--repeats N`
+  for variance. Aggregates also log to Langfuse when configured.
+
+Every case reduces to one uniform row (passed, 0–1 score, latency, tokens, $),
+and every `jim-eval run` persists one JSON document (git sha + config snapshot +
+all rows) under `EVAL_RUNS_DIR` (default `./eval_runs`). `jim-eval baseline set`
+promotes a known-good run; `jim-eval compare` / `run --compare-baseline` then
+diff exactly on offline suites (any newly-failing case = regression) and by
+configurable thresholds on live metrics (gate-rate drop, rubric drop, cost and
+latency increases). `jim-eval ui` (port 4023) serves the dashboard — trend
+charts, run drill-down, and the same comparison verdicts CI uses — as a
+self-contained page in the house style (inline CSS/JS, no CDN, works offline).
 
 ---
 
@@ -587,7 +610,8 @@ src/jim/
   store/                 Postgres+pgvector cache + margin ledger + monitors + trust
                          events (+ embed, CLI)
   obs/tracing.py         Langfuse (best-effort)
-  eval/                  gate regression + debate-vs-single-pass lift
+  eval/                  eval harness: gate/guards/scenario suites (offline) +
+                         live lift, persisted runs, baseline compare, dashboard
   dashboard.py           margin + monitor-economics dashboard
 ```
 

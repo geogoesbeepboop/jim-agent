@@ -1,5 +1,11 @@
-"""Regression eval suite: factuality gate + debate-vs-single-pass lift."""
+"""The eval harness: tiered suites, persisted runs, comparisons, dashboard.
 
-from jim.eval.runner import run_eval
+Offline (deterministic, no key): the sourcing-gate regression, the guard rails
+(impersonal/identifier/completeness/materiality/NL), and scripted full-engine
+scenarios. Live (needs ANTHROPIC_API_KEY): held-out tickers through the real
+pipeline, single-pass vs debate, scored by the rubric. See ``jim-eval --help``.
+"""
 
-__all__ = ["run_eval"]
+from jim.eval.runner import run_suites
+
+__all__ = ["run_suites"]

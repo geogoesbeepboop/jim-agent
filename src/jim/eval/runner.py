@@ -1,27 +1,66 @@
-"""Eval runner: gate regression (offline) + debate-vs-single-pass lift (live).
+"""Eval runner — executes suites, times/costs every case, persists the run.
 
-The lift question Phase 3 must answer: does the bull/bear/judge debate improve
-quality over the Phase-1 single pass? We run each held-out ticker both ways and
-compare gate pass-rate, sourcing coverage, and judge faithfulness. Results log
-to Langfuse when configured.
+Four suites, cheapest first:
+
+  - ``gate``       deterministic sourcing-gate regression (offline, no key).
+  - ``guards``     the other deterministic rails: impersonal tone, hostile
+                   identifiers, completeness, monitor materiality, NL
+                   propose/dispose (offline, no key).
+  - ``scenarios``  the real engine end-to-end with scripted I/O seams — retry
+                   loop, memo cache, refusal paths, margin ledger (offline).
+  - ``live``       held-out tickers through the real pipeline, single-pass vs
+                   debate, scored by the rubric (needs ANTHROPIC_API_KEY;
+                   spends real tokens; records latency + cost per run).
+
+``run_suites`` returns one self-contained run document (see
+:mod:`jim.eval.storage` for persistence) whose ``summary`` block carries the
+headline metrics the trend charts plot.
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+import sys
+import time
+from datetime import datetime, timezone
 
-from jim.research.facts import Fact, Snapshot
-from jim.research.gate import check_sourcing
+from jim.eval.metrics import CaseResult, aggregate_cases, suite_block
+
+OFFLINE_SUITES = ("gate", "guards", "scenarios")
+ALL_SUITES = OFFLINE_SUITES + ("live",)
 
 
-# --- Gate regression (deterministic, no API key) ----------------------------
+def _progress(message: str) -> None:
+    """Unbuffered one-line status to stderr — stdout stays reserved for the report."""
+    print(f"[jim-eval] {message}", file=sys.stderr, flush=True)
+
+
+# --- gate suite ---------------------------------------------------------------
 
 
 def run_gate_regression() -> dict:
-    from jim.eval.dataset import GATE_REGRESSION
+    """Back-compat summary of the gate suite (used by tests and --gate-only)."""
+    cases = run_suite_gate()
+    return {
+        "total": len(cases),
+        "correct": sum(c.passed for c in cases),
+        "cases": [
+            {
+                "name": c.name,
+                "expected_pass": c.details["expected_pass"],
+                "got_pass": c.details["got_pass"],
+                "correct": c.passed,
+            }
+            for c in cases
+        ],
+    }
 
-    results = []
-    passed = 0
+
+def run_suite_gate() -> list[CaseResult]:
+    from jim.eval.dataset import GATE_REGRESSION
+    from jim.research.facts import Fact, Snapshot
+    from jim.research.gate import check_sourcing
+
+    out: list[CaseResult] = []
     for case in GATE_REGRESSION:
         snap = Snapshot(
             ticker="T",
@@ -29,50 +68,115 @@ def run_gate_regression() -> dict:
             entity_name="T",
             facts=[Fact(id=i, label=i, value=v, unit=u) for i, (v, u) in case.facts.items()],
         )
+        t0 = time.perf_counter()
         verdict = check_sourcing(case.memo, snap)
-        ok = verdict.passed == case.should_pass
-        passed += ok
-        results.append(
-            {
-                "name": case.name,
-                "expected_pass": case.should_pass,
-                "got_pass": verdict.passed,
-                "correct": ok,
-            }
+        latency = (time.perf_counter() - t0) * 1000
+        out.append(
+            CaseResult(
+                suite="gate",
+                name=case.name,
+                passed=verdict.passed == case.should_pass,
+                latency_ms=latency,
+                details={
+                    "memo": case.memo,
+                    "expected_pass": case.should_pass,
+                    "got_pass": verdict.passed,
+                    "coverage": round(verdict.coverage, 4),
+                    "violations": [
+                        {"figure": v.figure, "reason": v.reason} for v in verdict.violations
+                    ],
+                },
+            )
         )
-    return {"total": len(GATE_REGRESSION), "correct": passed, "cases": results}
+    return out
 
 
-# --- Live lift eval ---------------------------------------------------------
+# --- guards suite ---------------------------------------------------------------
 
 
-@dataclass
-class RunMetrics:
-    ticker: str
-    variant: str  # "single_pass" | "debate"
-    status: str
-    gate_passed: bool = False
-    coverage: float = 0.0
-    material_coverage: float = 0.0
-    faithfulness: float | None = None
-    rubric_composite: float = 0.0
-    n_facts: int = 0
-    attempts: int = 0
-    inference_cost_usd: float = 0.0
-    error: str | None = None
+def run_suite_guards() -> list[CaseResult]:
+    from jim.eval.dataset_guards import GUARD_CASES
+
+    out: list[CaseResult] = []
+    for case in GUARD_CASES:
+        t0 = time.perf_counter()
+        try:
+            passed, details = case.check()
+            error = None
+        except Exception as e:  # a crashing guard is a failing case, not a dead run
+            passed, details, error = False, {}, f"{type(e).__name__}: {e}"
+        out.append(
+            CaseResult(
+                suite="guards",
+                name=f"{case.category}.{case.name}",
+                passed=passed,
+                latency_ms=(time.perf_counter() - t0) * 1000,
+                details=details,
+                error=error,
+            )
+        )
+    return out
 
 
-async def _run_one(ticker: str, variant: str) -> RunMetrics:
+# --- scenarios suite ------------------------------------------------------------
+
+
+async def run_suite_scenarios() -> list[CaseResult]:
+    from jim.eval.scenarios import SCENARIOS, run_scenario
+
+    out: list[CaseResult] = []
+    for scenario in SCENARIOS:
+        t0 = time.perf_counter()
+        try:
+            passed, details = await run_scenario(scenario)
+            error = None
+        except Exception as e:
+            passed, details = False, {}
+            error = f"{type(e).__name__}: {e}"
+        details = {"description": scenario.description, **details}
+        out.append(
+            CaseResult(
+                suite="scenarios",
+                name=scenario.name,
+                passed=passed,
+                latency_ms=(time.perf_counter() - t0) * 1000,
+                details=details,
+                error=error,
+            )
+        )
+    return out
+
+
+# --- live suite -----------------------------------------------------------------
+
+VARIANTS = ("single_pass", "debate")
+
+
+async def _run_live_case(ticker: str, variant: str, repeat: int) -> CaseResult:
     from jim.eval.rubric import score_memo
     from jim.research.engine import run_research
 
-    # Disable the memo cache so single_pass vs debate are compared head-to-head,
-    # never short-circuited by a memo a prior variant cached.
-    result = await run_research(
-        ticker, enable_debate=(variant == "debate"), use_memo_cache=False
-    )
+    name = f"{ticker}:{variant}" + (f"#r{repeat}" if repeat else "")
+    t0 = time.perf_counter()
+    try:
+        # Memo cache off so single_pass vs debate compare head-to-head, never
+        # short-circuited by a memo a prior variant cached.
+        result = await run_research(
+            ticker, enable_debate=(variant == "debate"), use_memo_cache=False
+        )
+    except Exception as e:
+        return CaseResult(
+            suite="live",
+            name=name,
+            passed=False,
+            latency_ms=(time.perf_counter() - t0) * 1000,
+            details={"ticker": ticker, "variant": variant, "status": "error"},
+            error=f"{type(e).__name__}: {e}",
+        )
+    latency = (time.perf_counter() - t0) * 1000
+
     faithfulness = result.judge.score if result.judge and not result.judge.skipped else None
-    composite = 0.0
+    composite = None
     if result.memo and result.snapshot is not None:
         composite = score_memo(
             result.memo,
@@ -81,109 +185,207 @@ async def _run_one(ticker: str, variant: str) -> RunMetrics:
             completeness=result.completeness,
             faithfulness=faithfulness,
         ).composite
-    return RunMetrics(
-        ticker=ticker,
-        variant=variant,
-        status=result.status,
-        gate_passed=bool(result.gate and result.gate.passed),
-        coverage=round(result.gate.coverage, 4) if result.gate else 0.0,
-        material_coverage=(
-            round(result.completeness.material_coverage, 4) if result.completeness else 0.0
-        ),
-        faithfulness=faithfulness,
-        rubric_composite=round(composite, 4),
-        n_facts=len(result.snapshot.facts) if result.snapshot else 0,
-        attempts=result.attempts,
-        inference_cost_usd=result.cost.get("inference_cost_usd", 0.0),
+    cost = result.cost or {}
+    return CaseResult(
+        suite="live",
+        name=name,
+        passed=result.status == "ok",
+        score=composite,
+        latency_ms=latency,
+        cost_usd=cost.get("inference_cost_usd", 0.0) + cost.get("data_cost_usd", 0.0),
+        input_tokens=cost.get("input_tokens", 0),
+        output_tokens=cost.get("output_tokens", 0),
+        details={
+            "ticker": ticker,
+            "variant": variant,
+            "repeat": repeat,
+            "status": result.status,
+            "gate_passed": bool(result.gate and result.gate.passed),
+            "coverage": round(result.gate.coverage, 4) if result.gate else None,
+            "material_coverage": (
+                round(result.completeness.material_coverage, 4) if result.completeness else None
+            ),
+            "faithfulness": faithfulness,
+            "attempts": result.attempts,
+            "n_facts": len(result.snapshot.facts) if result.snapshot else 0,
+            "memo": result.memo,
+            "violations": (
+                [{"figure": v.figure, "reason": v.reason} for v in result.gate.violations]
+                if result.gate
+                else []
+            ),
+            "judge_issues": result.judge.issues if result.judge else [],
+        },
         error=result.error,
     )
 
 
-def _aggregate(rows: list[RunMetrics]) -> dict:
-    ok = [r for r in rows if r.status == "ok"]
-    n = len(rows)
-    faiths = [r.faithfulness for r in rows if r.faithfulness is not None]
-    return {
-        "runs": n,
-        "gate_pass_rate": round(sum(r.gate_passed for r in rows) / n, 4) if n else 0.0,
-        "ok_rate": round(len(ok) / n, 4) if n else 0.0,
-        "mean_coverage": round(sum(r.coverage for r in rows) / n, 4) if n else 0.0,
-        "mean_material_coverage": round(sum(r.material_coverage for r in rows) / n, 4)
-        if n
-        else 0.0,
-        "mean_faithfulness": round(sum(faiths) / len(faiths), 4) if faiths else None,
-        "mean_rubric": round(sum(r.rubric_composite for r in rows) / n, 4) if n else 0.0,
-        "mean_facts": round(sum(r.n_facts for r in rows) / n, 1) if n else 0.0,
-        "mean_inference_cost_usd": round(sum(r.inference_cost_usd for r in rows) / n, 5)
-        if n
-        else 0.0,
-    }
+def _live_rollup(cases: list[CaseResult]) -> dict:
+    agg = aggregate_cases(cases)
+    n = len(cases)
+    if n:
+        gates = sum(1 for c in cases if c.details.get("gate_passed"))
+        faiths = [
+            c.details["faithfulness"] for c in cases if c.details.get("faithfulness") is not None
+        ]
+        agg["gate_pass_rate"] = round(gates / n, 4)
+        agg["mean_faithfulness"] = round(sum(faiths) / len(faiths), 4) if faiths else None
+        agg["mean_attempts"] = round(sum(c.details.get("attempts", 0) for c in cases) / n, 2)
+    else:
+        agg["gate_pass_rate"] = None
+        agg["mean_faithfulness"] = None
+        agg["mean_attempts"] = None
+    return agg
 
 
-@dataclass
-class EvalReport:
-    gate_regression: dict
-    single_pass: dict = field(default_factory=dict)
-    debate: dict = field(default_factory=dict)
-    rows: list[dict] = field(default_factory=list)
-    lift: dict = field(default_factory=dict)
+def _live_lift(variants: dict[str, dict]) -> dict:
+    """debate − single_pass on the headline metrics (None when either is missing)."""
+    sp, db = variants.get("single_pass"), variants.get("debate")
+    if not sp or not db:
+        return {}
+    lift = {}
+    for key in ("pass_rate", "gate_pass_rate", "mean_score", "mean_faithfulness", "mean_cost_usd"):
+        a, b = sp.get(key), db.get(key)
+        lift[key] = (
+            round(b - a, 4) if isinstance(a, (int, float)) and isinstance(b, (int, float)) else None
+        )
+    return lift
 
 
-async def run_eval(tickers: list[str] | None = None, *, live: bool = True) -> EvalReport:
-    """Run the gate regression and (if live) the debate-vs-single-pass comparison."""
+async def run_suite_live(
+    tickers: list[str] | None = None,
+    *,
+    repeats: int = 1,
+    variants: tuple[str, ...] = VARIANTS,
+) -> tuple[list[CaseResult], dict]:
+    """Run the live suite; returns (cases, extras) where extras carries the
+    per-variant rollups + debate lift."""
     from jim.eval.dataset import HELD_OUT
-    from jim.obs.tracing import _langfuse_client
-
-    gate = run_gate_regression()
-    report = EvalReport(gate_regression=gate)
-    if not live:
-        return report
 
     tickers = tickers or HELD_OUT
-    rows: list[RunMetrics] = []
-    for variant in ("single_pass", "debate"):
+    total = len(variants) * len(tickers) * repeats
+    cases: list[CaseResult] = []
+    for variant in variants:
         for ticker in tickers:
-            try:
-                rows.append(await _run_one(ticker, variant))
-            except Exception as e:  # keep the eval going past one bad ticker
-                rows.append(
-                    RunMetrics(ticker=ticker, variant=variant, status="error", error=str(e))
-                )
+            for repeat in range(repeats):
+                name = f"{ticker}:{variant}" + (f"#r{repeat}" if repeat else "")
+                _progress(f"live {len(cases) + 1}/{total} {name} ...")
+                t0 = time.perf_counter()
+                case = await _run_live_case(ticker, variant, repeat)
+                elapsed = time.perf_counter() - t0
+                status = "ok" if case.passed else f"FAIL ({case.error or 'see details'})"
+                _progress(f"live {len(cases) + 1}/{total} {name} {status} in {elapsed:.1f}s")
+                cases.append(case)
 
-    sp = _aggregate([r for r in rows if r.variant == "single_pass"])
-    db = _aggregate([r for r in rows if r.variant == "debate"])
-    report.single_pass = sp
-    report.debate = db
-    report.rows = [asdict(r) for r in rows]
-    report.lift = {
-        "gate_pass_rate": round(db["gate_pass_rate"] - sp["gate_pass_rate"], 4),
-        "mean_material_coverage": round(
-            db["mean_material_coverage"] - sp["mean_material_coverage"], 4
-        ),
-        "mean_faithfulness": (
-            round((db["mean_faithfulness"] or 0) - (sp["mean_faithfulness"] or 0), 4)
-            if db["mean_faithfulness"] is not None and sp["mean_faithfulness"] is not None
-            else None
-        ),
-        "mean_rubric": round(db["mean_rubric"] - sp["mean_rubric"], 4),
-        "mean_facts": round(db["mean_facts"] - sp["mean_facts"], 1),
+    per_variant = {
+        v: _live_rollup([c for c in cases if c.details.get("variant") == v]) for v in variants
+    }
+    return cases, {"variants": per_variant, "lift": _live_lift(per_variant)}
+
+
+# --- orchestration ----------------------------------------------------------------
+
+
+def _config_snapshot() -> dict:
+    from jim.config import get_settings
+
+    s = get_settings()
+    return {
+        "research_model": s.research_model,
+        "judge_model": s.judge_model,
+        "judge_high_stakes_model": s.judge_high_stakes_model,
+        "debate_model": s.debate_model,
+        "enable_judge": s.enable_judge,
+        "judge_threshold": s.judge_threshold,
+        "research_max_attempts": s.research_max_attempts,
+        "enable_debate": s.enable_debate,
+        "has_anthropic_key": bool(s.anthropic_api_key),
     }
 
-    # Log aggregate scores to Langfuse if configured.
-    client = _langfuse_client()
-    if client is not None:
-        try:
-            with client.start_as_current_observation(
-                name="eval.debate_vs_single_pass", as_type="span"
-            ):
-                for k, v in db.items():
-                    if isinstance(v, (int, float)):
-                        client.score_current_trace(name=f"debate.{k}", value=float(v))
-                for k, v in sp.items():
-                    if isinstance(v, (int, float)):
-                        client.score_current_trace(name=f"single_pass.{k}", value=float(v))
-            client.flush()
-        except Exception:
-            pass
 
-    return report
+def _summarize(suites: dict[str, dict], extras: dict) -> dict:
+    offline_cases = offline_passed = 0
+    total_cost = 0.0
+    for name in OFFLINE_SUITES:
+        agg = suites.get(name, {}).get("aggregate")
+        if agg:
+            offline_cases += agg["cases"]
+            offline_passed += agg["passed"]
+            total_cost += agg["total_cost_usd"]
+    summary: dict = {
+        "offline_cases": offline_cases,
+        "offline_passed": offline_passed,
+        "offline_pass_rate": round(offline_passed / offline_cases, 4) if offline_cases else None,
+        "all_offline_passed": offline_cases > 0 and offline_passed == offline_cases,
+    }
+    live = suites.get("live", {}).get("aggregate")
+    if live:
+        total_cost += live["total_cost_usd"]
+        summary.update(
+            {
+                "live_cases": live["cases"],
+                "live_ok_rate": live["pass_rate"],
+                "live_gate_pass_rate": live.get("gate_pass_rate"),
+                "live_mean_rubric": live.get("mean_score"),
+                "live_mean_faithfulness": live.get("mean_faithfulness"),
+                "live_mean_cost_usd": live.get("mean_cost_usd"),
+                "live_latency_p50_ms": live.get("latency_p50_ms"),
+                "live_latency_p95_ms": live.get("latency_p95_ms"),
+                "live_lift": extras.get("live_lift") or {},
+            }
+        )
+    summary["total_cost_usd"] = round(total_cost, 6)
+    return summary
+
+
+async def run_suites(
+    names: list[str],
+    *,
+    tickers: list[str] | None = None,
+    repeats: int = 1,
+    label: str | None = None,
+) -> dict:
+    """Run the named suites and return the (unsaved) run document."""
+    from jim.eval.storage import SCHEMA_VERSION, git_info, new_run_id
+
+    started = datetime.now(timezone.utc)
+    t0 = time.perf_counter()
+    git = git_info()
+
+    suites: dict[str, dict] = {}
+    extras: dict = {}
+    for name in names:
+        suite_t0 = time.perf_counter()
+        _progress(f"suite {name} starting...")
+        if name == "gate":
+            suites["gate"] = suite_block(run_suite_gate())
+        elif name == "guards":
+            suites["guards"] = suite_block(run_suite_guards())
+        elif name == "scenarios":
+            suites["scenarios"] = suite_block(await run_suite_scenarios())
+        elif name == "live":
+            cases, live_extras = await run_suite_live(tickers, repeats=repeats)
+            block = suite_block(cases)
+            block["aggregate"] = _live_rollup(cases)
+            block["variants"] = live_extras["variants"]
+            block["lift"] = live_extras["lift"]
+            suites["live"] = block
+            extras["live_lift"] = live_extras["lift"]
+        else:
+            raise ValueError(f"unknown suite: {name!r} (choose from {ALL_SUITES})")
+        _progress(f"suite {name} done in {time.perf_counter() - suite_t0:.1f}s")
+
+    finished = datetime.now(timezone.utc)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": new_run_id(started, git.get("sha")),
+        "label": label,
+        "started_at": started.isoformat(),
+        "finished_at": finished.isoformat(),
+        "duration_seconds": round(time.perf_counter() - t0, 2),
+        "git": git,
+        "config": _config_snapshot(),
+        "params": {"suites": list(names), "tickers": tickers, "repeats": repeats},
+        "suites": suites,
+        "summary": _summarize(suites, extras),
+    }

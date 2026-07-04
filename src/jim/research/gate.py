@@ -56,7 +56,7 @@ _FIGURE_RE = re.compile(
 _RANGE_RE = re.compile(
     r"""
     (?P<cursym>[$€£])?\s?(?P<lo>\d+(?:\.\d+)?)\s?[–—-]\s?[$€£]?(?P<hi>\d+(?:\.\d+)?)
-    \s?(?P<scale>trillion|billion|million|thousand|tn|bn|mn|[TBMK])?\s?(?P<pctsym>%)?
+    \s?(?P<scale>(?:trillion|billion|million|thousand|tn|bn|mn)\b|(?-i:[TBMK])\b)?\s?(?P<pctsym>%)?
     """,
     re.VERBOSE | re.IGNORECASE,
 )
