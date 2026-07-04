@@ -115,3 +115,22 @@ def test_qualitative_text_needs_no_citation() -> None:
     result = check_sourcing(memo, _snapshot())
     assert result.passed
     assert result.n_figures == 0
+
+
+def test_year_span_before_scale_lookalike_word_is_not_a_figure() -> None:
+    # Regression: _RANGE_RE's single-letter scale class used to match the "t" of
+    # a following word case-insensitively ("2023-2024 the…" read as trillions),
+    # false-rejecting truthful prose. Date spans must never become figures.
+    memo = "Between 2023-2024 the company expanded internationally."
+    result = check_sourcing(memo, _snapshot())
+    assert result.passed, result.feedback()
+    assert result.n_figures == 0
+
+
+def test_suffixed_range_still_extracts() -> None:
+    # The fix must not loosen real ranges: an uppercase-suffixed hallucinated
+    # range stays a checkable figure and is rejected.
+    memo = "Guidance sits at $1.2-1.4B [C1]."
+    result = check_sourcing(memo, _snapshot())
+    assert not result.passed
+    assert result.n_figures == 2

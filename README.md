@@ -54,7 +54,8 @@ src/jim/
     budget.py           # per-query budget cap (propose/dispose)
     products.py         # registry: fundamentals→EDGAR, token→The Graph
     engine.py           # LangGraph: gather → memo-cache → synthesize → gate(retry) → judge
-  eval/rubric.py        # weighted "better output" score (sourcing+completeness+…)
+  eval/                 # eval harness: offline suites + live lift, persisted runs,
+                        #   baseline compare, dashboard (jim-eval / jim-eval ui)
   interop/              # Phase 7: the seam between agents (model proposes, code disposes)
     callchain.py        # X-Jim-Call-Chain: loop + depth refusal BEFORE any payment
     trust.py            # per-source trust = gate pass-rate (reputation by verification)
@@ -154,7 +155,7 @@ Phase 3 adds the bull/bear/judge debate and price-derived metrics automatically
 ```bash
 uv run jim-research AAPL                  # now includes debate + Market Cap, P/E, RSI, MACD...
 uv run jim-eval --gate-only               # offline: planted hallucinations must be blocked (no key)
-uv run jim-eval AAPL MSFT                 # live: debate vs single-pass lift (needs key)
+uv run jim-eval run --suite live AAPL MSFT  # live: debate vs single-pass lift (needs key)
 ```
 
 ## Research quality: memo cache, completeness, judge, rubric
@@ -182,7 +183,7 @@ Four upgrades to "is the answer good?" — see
 uv run jim-research AAPL                  # 2nd identical run → "(memo cache — $0 inference)"
 uv run jim-research AAPL --no-cache       # force a fresh synthesis
 uv run jim-research NVDA --high-stakes    # upgrade the faithfulness judge to Sonnet
-uv run jim-eval AAPL MSFT                 # report now includes material coverage + composite rubric
+uv run jim-eval run --suite live AAPL MSFT  # live report: material coverage + composite rubric
 ```
 > New tables: run `uv run jim-initdb` once to create `memo_cache` (and, for
 > Phase 7, `source_trust_events`) — a no-op for tables that already exist.
@@ -410,6 +411,40 @@ new config or hand-rolled crypto. See
 > New table: run `uv run jim-initdb` once to create `payment_receipts` before the
 > admin view populates (no-op if it already exists).
 
+## The eval harness: is jim improving?
+
+Every property jim sells — lies blocked, tone impersonal, rejected runs never
+billed — plus quality/cost/latency, measured per run and tracked over time. See
+[ADR-0009](docs/adr/0009-eval-harness-persisted-runs-tiered-suites.md).
+
+```bash
+uv run jim-eval                            # offline suites (87 cases, ~1.5s, no key/DB/network):
+                                           #  · gate: 38 memos — every notation the extractor
+                                           #    knows, truthful (must pass) + planted (must reject)
+                                           #  · guards: impersonal tone, hostile identifiers,
+                                           #    completeness, materiality, NL propose/dispose
+                                           #  · scenarios: the real engine with scripted seams —
+                                           #    retry loop, memo cache, fail-closed paths, and the
+                                           #    never-bill-rejected invariant checked at the ledger
+uv run jim-eval run --suite all --label "sonnet-4-6"   # + live: held-out tickers, single-pass vs
+                                           #    debate, rubric/latency/tokens/$ per run (needs key)
+uv run jim-eval list                       # run history (persisted to ./eval_runs, gitignored)
+uv run jim-eval baseline set latest        # promote a known-good run
+uv run jim-eval run --compare-baseline     # exit 1 on regression vs the baseline:
+                                           #    offline = any newly-failing case (zero tolerance)
+                                           #    live    = configurable thresholds (gate-rate drop,
+                                           #              rubric drop, cost/latency increases)
+uv run jim-eval compare baseline latest    # the same diff, on demand
+uv run jim-eval ui                         # dashboard on :4023 — trend charts (pass rates, rubric,
+                                           #    $/run, p50/p95 latency), per-case drill-down with
+                                           #    memos + violations, run-vs-run comparison
+```
+
+The offline suites are the merge gate (`jim-eval --gate-only` still works for
+the gate alone). Every dataset label is itself enforced by
+`tests/test_eval_harness.py`, so a mislabeled case fails `pytest` — the eval
+can't silently rot.
+
 ## Tests
 
 ```bash
@@ -445,6 +480,10 @@ uv run pytest          # all offline, no wallet/network/API key/DB:
                        #    budget/cache, purchase cache, trust-floor refusal, composite
                        #    merge + origins, gate-as-firewall, outcome attribution,
                        #    trust ledger, call-chain codec + 409 loop/depth refusals
+                       #  · eval harness: every gate/guard/scenario dataset label is
+                       #    executed for real (a mislabeled case fails pytest), run
+                       #    storage + baseline round-trip, regression verdicts (exact
+                       #    offline / thresholded live), CLI exit codes, dashboard API
 ```
 
 > Tests are hermetic by design (a `conftest.py` neutralises `DATABASE_URL` /

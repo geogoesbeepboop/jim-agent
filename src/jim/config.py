@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     research_max_attempts: int = 2  # synthesize retries on a gate failure
     enable_judge: bool = True
     judge_threshold: float = 0.8  # faithfulness score below this fails the run
+    # The judge emits a per-claim checklist as JSON; a real memo has 15-25 claims,
+    # so the budget must clear the whole object or the JSON truncates mid-array and
+    # fails to parse — which fail-closes every run. 900 was far too small (see ADR-0009).
+    judge_max_tokens: int = 4096
     # High-stakes runs upgrade the faithfulness judge to a stronger model (per-claim
     # checklist still applies). Used when run_research(high_stakes=True).
     judge_high_stakes_model: str = "claude-sonnet-4-6"
@@ -211,6 +215,18 @@ class Settings(BaseSettings):
     # the free testnet facilitator and a production facilitator differ).
     facilitator_min_usdc: float = 0.0  # smallest settleable amount, if any
     facilitator_fee_bps: float = 0.0  # facilitator fee in basis points, if any
+
+    # --- Eval harness: persisted runs + regression thresholds ---------------
+    # Where `jim-eval run` persists its JSON run documents (and the BASELINE
+    # marker). Relative paths resolve against the working directory.
+    eval_runs_dir: str = "eval_runs"
+    # Live-suite regression thresholds for `jim-eval compare` / --compare-baseline.
+    # Offline suites need no thresholds: any newly-failing deterministic case is
+    # a regression outright.
+    eval_gate_pass_rate_drop: float = 0.05  # live gate pass-rate may drop this much
+    eval_rubric_drop: float = 0.02  # mean rubric composite may drop this much
+    eval_cost_increase_pct: float = 25.0  # mean $/run may rise this much (%)
+    eval_latency_increase_pct: float = 50.0  # p95 latency may rise this much (%)
 
     # --- Phase 6: resilience (timeouts, retries, circuit breaker) -----------
     # Every free upstream fetch (EDGAR, Yahoo, macro) runs through

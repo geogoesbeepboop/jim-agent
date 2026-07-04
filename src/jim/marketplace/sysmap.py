@@ -86,6 +86,7 @@ def system_graph(settings: Settings | None = None) -> SystemGraph:
         ("storage", "Store + margin ledger"),
         ("monitors", "Monitors (Phase 4)"),
         ("obs", "Observability"),
+        ("eval", "Eval harness"),
     ]
 
     net = "Base mainnet" if s.is_mainnet else "Base Sepolia (testnet)"
@@ -220,6 +221,12 @@ def system_graph(settings: Settings | None = None) -> SystemGraph:
         )
     )
 
+    # --- Eval harness ---
+    g.add(Node("eval_offline", "offline suites<br/>(gate · guards · scenarios)", "eval", "eval"))
+    g.add(Node("eval_live", "live suite<br/>(single-pass vs debate, held-out)", "eval", "eval"))
+    g.add(Node("eval_storage", f"run storage<br/>{s.eval_runs_dir}/*.json", "eval", "eval"))
+    g.add(Node("eval_compare", "compare vs baseline<br/>(regression thresholds)", "eval", "eval"))
+
     # --- Edges ---
     # Buyers reach discovery + the rails.
     g.link("mcp_agent", "mcp_srv", "discover")
@@ -321,6 +328,15 @@ def system_graph(settings: Settings | None = None) -> SystemGraph:
     g.link("judge", "langfuse", "scores")
     g.link("gate", "langfuse", "coverage")
 
+    # Eval harness: offline suites exercise the gate deterministically; the live
+    # suite runs the real pipeline end-to-end (needs ANTHROPIC_API_KEY). Both
+    # persist a run document that compare/baseline reads back for regressions.
+    g.link("eval_offline", "gate", "check_sourcing (no LLM)")
+    g.link("eval_live", "gather", "run_research (single-pass + debate)")
+    g.link("eval_offline", "eval_storage", "persist run")
+    g.link("eval_live", "eval_storage", "persist run")
+    g.link("eval_storage", "eval_compare", "base vs candidate")
+
     return g
 
 
@@ -338,6 +354,7 @@ _KIND_STYLE = {
     "store": "fill:#fffde7,stroke:#f9a825,color:#f57f17",
     "monitor": "fill:#e0f2f1,stroke:#00897b,color:#004d40",
     "obs": "fill:#efebe9,stroke:#6d4c41,color:#3e2723",
+    "eval": "fill:#ede7f6,stroke:#7e57c2,color:#311b92",
 }
 
 

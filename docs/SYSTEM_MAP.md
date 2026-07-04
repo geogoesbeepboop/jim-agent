@@ -384,6 +384,57 @@ flowchart LR
 
 ---
 
+## 9. Evals — how we know jim is improving
+
+The eval harness ([`eval/`](../src/jim/eval/), `jim-eval`) answers "is jim getting
+better?" with persisted, comparable numbers instead of stdout that scrolls away.
+Four suites run cheapest-first; every case — deterministic or live — reduces to
+**one uniform row** (passed, 0–1 score, latency ms, tokens, $), and each
+`jim-eval run` persists a single JSON document (git sha + config snapshot + all
+rows). See [ADR-0009](adr/0009-eval-harness-persisted-runs-tiered-suites.md) and
+[ARCHITECTURE §11](ARCHITECTURE.md#11-evals).
+
+```mermaid
+flowchart LR
+  subgraph offline["Offline suites — deterministic, no key, gate merges"]
+    gate["gate<br/>38 memos: truthful vs planted-lie<br/>per gate notation"]:::gate
+    guards["guards<br/>40 cases: impersonal · identifiers ·<br/>completeness · monitor materiality"]:::gate
+    scen["scenarios<br/>9 end-to-end engine runs<br/>(scripted seams, never-bill-rejected)"]:::gate
+  end
+  subgraph live["live suite — needs ANTHROPIC_API_KEY"]
+    lift["held-out tickers<br/>single-pass ∥ debate<br/>rubric + faithfulness judge"]:::model
+  end
+  row["one uniform row per case<br/>passed · score · latency · tokens · $"]:::note
+  run["persisted run (JSON)<br/>git sha + config + all rows<br/>EVAL_RUNS_DIR"]:::store
+  base["baseline / compare<br/>offline: any new fail = regression<br/>live: thresholded metric drops"]:::gate
+  ci["CI gate (exit 1)"]:::bad
+  ui["jim-eval ui<br/>trend charts + drill-down"]:::ok
+
+  gate --> row
+  guards --> row
+  scen --> row
+  lift --> row
+  row --> run --> base
+  base --> ci
+  run --> ui
+
+  classDef gate fill:#fce4ec,stroke:#c2185b,color:#880e4f;
+  classDef model fill:#e1f5fe,stroke:#0277bd,color:#01579b;
+  classDef store fill:#ede7f6,stroke:#5e35b1,color:#311b92;
+  classDef ok fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20;
+  classDef bad fill:#ffebee,stroke:#c62828,color:#b71c1c;
+  classDef note fill:#fffde7,stroke:#f9a825,color:#f57f17;
+```
+
+The live suite is where the LLM **faithfulness judge** runs (§5's semantic layer):
+it emits a per-claim checklist as JSON, so its token budget (`judge_max_tokens`)
+must clear the whole object — too small and the JSON truncates mid-array, fails to
+parse, and fail-closes every run. This is exactly the class of silent regression
+the persisted live suite exists to surface: a run where the gate passes but
+`ok rate` collapses to 0 is visible at a glance, not buried in stdout.
+
+---
+
 ## The live map
 
 The diagrams above are static. To see **your** running system — the actual

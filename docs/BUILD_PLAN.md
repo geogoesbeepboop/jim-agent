@@ -123,8 +123,10 @@ Goal: research quality + the best "how I built it" story.
       citation-anchored check; gate regression is a merge gate (`jim-eval --gate-only`).
 - [x] Regression eval suite ([eval/](../src/jim/eval/), `jim-eval`): gate
       regression (offline) + debate-vs-single-pass lift, logged to Langfuse.
-- [ ] **Live exit run:** `jim-eval` over the held-out set shows debate ≥ single-pass
-      on gate pass-rate / faithfulness (needs ANTHROPIC_API_KEY).
+      Grown into the full harness — tiered offline suites, persisted runs,
+      baseline compare, dashboard (see ADR-0009).
+- [ ] **Live exit run:** `jim-eval run --suite live` over the held-out set shows
+      debate ≥ single-pass on gate pass-rate / faithfulness (needs ANTHROPIC_API_KEY).
 
 **Notes:**
 - "P/E (Fwd)" needs forward EPS estimates (an analyst-estimates source we don't

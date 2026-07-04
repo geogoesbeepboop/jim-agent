@@ -96,6 +96,54 @@ def _parse_claims(raw) -> list[ClaimVerdict]:
     return claims
 
 
+def _salvage_claims(text: str) -> list[ClaimVerdict]:
+    """Recover the complete claim objects from a truncated checklist.
+
+    When the response is cut off mid-array, the outer JSON won't parse, but the
+    claim objects emitted *before* the cut are intact. Walk the ``"claims"`` array
+    brace-by-brace (respecting strings) and json.loads each balanced ``{...}`` — the
+    final, half-written object is simply skipped. Best-effort diagnostics only.
+    """
+    key = text.find('"claims"')
+    if key == -1:
+        return []
+    arr = text.find("[", key)
+    if arr == -1:
+        return []
+    objs: list[dict] = []
+    depth = 0
+    in_str = False
+    esc = False
+    obj_start = -1
+    for i in range(arr, len(text)):
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                obj_start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and obj_start != -1:
+                try:
+                    objs.append(json.loads(text[obj_start : i + 1]))
+                except json.JSONDecodeError:
+                    pass
+                obj_start = -1
+        elif ch == "]" and depth == 0:
+            break
+    return _parse_claims(objs)
+
+
 async def judge_faithfulness(
     memo: str, snapshot: Snapshot, *, high_stakes: bool = False
 ) -> JudgeResult:
@@ -110,7 +158,7 @@ async def judge_faithfulness(
     )
     resp = await client.messages.create(
         model=model,
-        max_tokens=900,  # room for the per-claim checklist
+        max_tokens=settings.judge_max_tokens,  # room for the full per-claim checklist
         system=[{"type": "text", "text": _SYSTEM, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": user}],
     )
@@ -120,6 +168,10 @@ async def judge_faithfulness(
         output_tokens=resp.usage.output_tokens,
     )
     text = "".join(b.text for b in resp.content if b.type == "text").strip()
+    # ``max_tokens`` means the JSON was guillotined mid-object: json.loads fails not
+    # because the judge is confused but because we didn't give it room. Name that
+    # failure honestly so it's debuggable, and salvage the claims it *did* emit.
+    truncated = getattr(resp, "stop_reason", None) == "max_tokens"
     try:
         # Be tolerant of stray fencing.
         start, end = text.find("{"), text.rfind("}")
@@ -131,13 +183,22 @@ async def judge_faithfulness(
         if not issues:
             issues = [f"unsupported: {c.claim}" for c in claims if not c.supported]
     except (ValueError, json.JSONDecodeError):
-        # A judge we can't parse should not silently pass the run.
+        # A judge we can't parse should not silently pass the run. Fail closed, but
+        # distinguish "ran out of tokens" from "emitted junk" and surface any complete
+        # claims we can recover so the failure is actionable rather than opaque.
+        salvaged = _salvage_claims(text) if truncated else []
+        detail = (
+            f"judge output truncated at max_tokens ({settings.judge_max_tokens}); "
+            f"raise judge_max_tokens"
+            if truncated
+            else "judge returned unparseable output"
+        )
         return JudgeResult(
             skipped=False,
             passed=False,
             score=0.0,
-            issues=["judge returned unparseable output"],
-            claims=[],
+            issues=[detail],
+            claims=salvaged,
             model=model,
             usage=usage,
         )

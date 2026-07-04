@@ -35,16 +35,18 @@ class _FakeBlock:
 
 
 class _FakeResp:
-    def __init__(self, text: str):
+    def __init__(self, text: str, stop_reason: str = "end_turn"):
         self.content = [_FakeBlock(text)]
         self.usage = _FakeUsage()
+        self.stop_reason = stop_reason
 
 
-def _fake_client(capture: dict, payload: str):
+def _fake_client(capture: dict, payload: str, stop_reason: str = "end_turn"):
     class _Messages:
         async def create(self, *, model, **kwargs):
             capture["model"] = model
-            return _FakeResp(payload)
+            capture["max_tokens"] = kwargs.get("max_tokens")
+            return _FakeResp(payload, stop_reason)
 
     class _Client:
         def __init__(self, *a, **k):
@@ -117,6 +119,42 @@ async def test_unparseable_fails_closed(monkeypatch) -> None:
     res = await judge_faithfulness("memo", _snap())
     assert res.passed is False and res.score == 0.0
     assert "unparseable" in res.issues[0]
+
+
+async def test_truncated_output_fails_closed_and_salvages(monkeypatch) -> None:
+    # A checklist guillotined mid-array: the outer JSON won't parse, but the two
+    # complete claim objects before the cut are recoverable. This is the exact
+    # failure that rejected every live memo when max_tokens was 900.
+    truncated = (
+        '{"score": 0.9, "supported": true, "claims": ['
+        '{"claim": "Revenue $100", "supported": true, "citation": "C1", "reason": "ok"},'
+        '{"claim": "Cash $45", "supported": true, "citation": "C1", "reason": "ok"},'
+        '{"claim": "Debt $30", "supported": tr'  # <- cut off here
+    )
+    capture: dict = {}
+    monkeypatch.setattr(
+        judge_mod, "AsyncAnthropic", _fake_client(capture, truncated, stop_reason="max_tokens")
+    )
+    monkeypatch.setattr(
+        judge_mod, "get_settings", lambda: Settings(anthropic_api_key="sk-test")
+    )
+    res = await judge_faithfulness("memo", _snap())
+    assert res.passed is False and res.score == 0.0  # never pass on partial evidence
+    assert "truncated" in res.issues[0] and "max_tokens" in res.issues[0]
+    assert [c.claim for c in res.claims] == ["Revenue $100", "Cash $45"]  # salvaged
+
+
+async def test_uses_configured_max_tokens(monkeypatch) -> None:
+    payload = json.dumps({"score": 1.0, "supported": True, "claims": [], "issues": []})
+    capture: dict = {}
+    monkeypatch.setattr(judge_mod, "AsyncAnthropic", _fake_client(capture, payload))
+    monkeypatch.setattr(
+        judge_mod,
+        "get_settings",
+        lambda: Settings(anthropic_api_key="sk-test", judge_max_tokens=4096),
+    )
+    await judge_faithfulness("memo", _snap())
+    assert capture["max_tokens"] == 4096
 
 
 def test_judge_result_skip_shape() -> None:
