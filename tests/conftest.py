@@ -29,3 +29,10 @@ os.environ["CDP_API_KEY_SECRET"] = ""
 # A developer's configured peer agents (Phase 7) must not leak into the suite —
 # tests construct their own PeerSpec/PeerSource explicitly.
 os.environ["PEER_SOURCES"] = ""
+# Pin the network to the documented offline default (Base Sepolia, config.py's
+# BASE_SEPOLIA). A .env set to Base mainnet (eip155:8453) breaks the paywall/
+# discovery/call-chain tests — the testnet facilitator rejects mainnet routes.
+os.environ["NETWORK"] = "eip155:84532"
+# .env's true would make the UI checkout tests need a funded wallet instead of
+# the offline direct-research path; false is the documented offline default.
+os.environ["UI_SETTLE_VIA_X402"] = "false"
