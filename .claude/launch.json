@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "jim-seller",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "jim-seller"],
+      "port": 4021
+    }
+  ]
+}
