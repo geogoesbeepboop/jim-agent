@@ -243,6 +243,7 @@ async def run_research(
     enable_debate: bool | None = None,
     high_stakes: bool = False,
     use_memo_cache: bool | None = None,
+    price_out_usd: float | None = None,
 ) -> ResearchResult:
     """Run the full pipeline for an identifier and return a structured result.
 
@@ -253,6 +254,10 @@ async def run_research(
         enable_debate: override the bull/bear/judge debate (eval A/B). None = config.
         high_stakes: upgrade the faithfulness judge to the stronger model.
         use_memo_cache: override the memo cache (eval A/B disables it). None = config.
+        price_out_usd: override the revenue booked for an *ok* run. A2A charges
+            tier pricing (agent-tier discount, monitor prices), so the ledger must
+            record what was actually charged, not just the product's headline
+            price. The billing invariant is untouched: a non-ok run still books $0.
     """
     # Canonicalize before anything else: a hostile identifier is refused here,
     # before it can reach a source fetch, a store key, or the graph at all.
@@ -307,8 +312,10 @@ async def run_research(
         served_from_cache = bool(final.get("served_from_cache", False))
         inference_cost = round(ledger.inference_cost_usd, 6)
         # Rejected/errored runs are refused (never settled), so they earn $0 —
-        # the margin ledger must show the loss, not phantom revenue.
-        price_out = spec.price_out_usd if status == "ok" else 0.0
+        # the margin ledger must show the loss, not phantom revenue. When a caller
+        # (A2A) charged a tier price, book THAT for an ok run; $0 for non-ok holds.
+        booked_price = spec.price_out_usd if price_out_usd is None else price_out_usd
+        price_out = booked_price if status == "ok" else 0.0
         margin = round(price_out - cost_in_data - inference_cost, 6)
 
         # Completeness: what material facts did the memo leave out? (signal, not gate)

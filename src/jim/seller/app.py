@@ -31,12 +31,14 @@ from x402.server import x402ResourceServer
 
 from jim.marketplace.facilitator import build_facilitator_client
 
+from jim.a2a import build_a2a_components, mount_a2a
+from jim.a2a.card import agent_card
+from jim.a2a.extension import X402ExtensionEchoMiddleware
 from jim.admin import admin_dashboard
 from jim.config import Settings, get_settings
 from jim.dashboard import margin_dashboard
 from jim.interop.callchain import CallChainMiddleware
 from jim.seller.audit import PaymentAuditMiddleware
-from jim.marketplace.agentcard import agent_card
 from jim.marketplace.catalog import build_catalog, listing_for
 from jim.marketplace.discovery import discovery_manifest
 from jim.marketplace.mainnet import check_mainnet_readiness
@@ -137,13 +139,19 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     if not settings.evm_address:
         raise ValueError("EVM_ADDRESS is not set. Run `uv run jim-wallet new` and add it to .env.")
 
-    lifespan = _scheduler_lifespan(settings) if settings.monitor_autostart else None
+    # A2A 1.0 durable-task surface (ADR-0010), behind the A2A_ENABLED kill-switch.
+    # Built before the app so the lifespan can await the task store's DB init when
+    # a Postgres store was constructed; the DB-less default awaits nothing.
+    a2a = build_a2a_components(settings) if settings.a2a_enabled else None
+
     app = FastAPI(
         title="jim — financial research (x402)",
         version="0.1.0",
         summary="Cited financial research, sold over x402",
-        lifespan=lifespan,
+        lifespan=_seller_lifespan(settings, a2a),
     )
+    if a2a is not None:
+        app.state.a2a = a2a
 
     # Wire the resource server to a facilitator and register the EXACT-EVM scheme
     # for our network. The facilitator does the on-chain verify + settle.
@@ -223,11 +231,22 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         PaymentMiddlewareASGI, routes=routes, server=server, paywall_provider=paywall_provider
     )
     app.add_middleware(PaymentAuditMiddleware)
+    # The A2A extension-echo layer is path-scoped to /a2a (payment ignores those
+    # paths anyway), so it sits inside CallChain and leaves the three existing
+    # middlewares' relative order untouched — CallChain stays the last add / OUTERMOST.
+    if a2a is not None:
+        app.add_middleware(X402ExtensionEchoMiddleware)
     app.add_middleware(
         CallChainMiddleware,
         own_address=settings.evm_address,
         max_depth=settings.call_chain_max_depth,
     )
+
+    # Mount both v0.3-compat A2A bindings (JSON-RPC + REST) under /a2a — no paid
+    # routes, so the x402 `routes` dict is untouched (ADR-0010). Loop/over-depth
+    # refusal (CallChain, above) pre-empts any A2A processing.
+    if a2a is not None:
+        mount_a2a(app, a2a)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -455,8 +474,18 @@ def _request_base_url(request: Request, settings: Settings) -> str:
     return str(request.base_url).rstrip("/")
 
 
-def _scheduler_lifespan(settings: Settings):
-    """FastAPI lifespan that runs the monitor scheduler in-process (autostart)."""
+def _seller_lifespan(settings: Settings, a2a):
+    """FastAPI lifespan: init the A2A DB task store, then (optionally) the scheduler.
+
+    Returns ``None`` when there is nothing to do — the DB-less A2A default
+    (``InMemoryTaskStore``) needs no init, and the monitor scheduler is off by
+    default — so the hermetic path keeps ``lifespan=None`` (no startup awaits),
+    byte-identical to before A2A landed.
+    """
+    needs_db_init = a2a is not None and a2a.needs_db_init
+    if not settings.monitor_autostart and not needs_db_init:
+        return None
+
     import asyncio
     from contextlib import asynccontextmanager
 
@@ -464,6 +493,15 @@ def _scheduler_lifespan(settings: Settings):
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # Durable A2A tasks on Postgres: create the tasks table before serving
+        # (async, so deferred out of build_a2a_components — ADR-0010).
+        if needs_db_init:
+            await a2a.task_store.initialize()
+
+        if not settings.monitor_autostart:
+            yield
+            return
+
         sched = MonitorScheduler()
         task = asyncio.create_task(sched.run_forever())
         try:
