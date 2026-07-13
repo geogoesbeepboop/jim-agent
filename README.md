@@ -18,7 +18,9 @@ arms; **[docs/ROADMAP.md](docs/ROADMAP.md)** is the buildable backlog;
 **[docs/ENTERPRISE_VISION.md](docs/ENTERPRISE_VISION.md)** is the "how I'd scale
 this at Stripe / VISA / Coinbase" thinking; and
 **[docs/AGENT_INTEROP.md](docs/AGENT_INTEROP.md)** covers whether and how jim
-should talk to other agents.
+should talk to other agents. For the capabilities-at-a-glance narrative — what's
+proven, the war stories, and the leverage-ordered plan — see
+**[docs/SHOWCASE.md](docs/SHOWCASE.md)**.
 
 > **Status: Phase 7 — the agent economy (+ Track 0 & Phase 6 hardening).** jim
 > now **composes peer agents**: a `PeerSource` buys cited signals from other
