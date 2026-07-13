@@ -17,8 +17,8 @@ import asyncio
 import json
 import sys
 
+from jim.a2a.card import agent_card
 from jim.config import get_settings
-from jim.marketplace.agentcard import agent_card
 from jim.marketplace.catalog import build_catalog
 from jim.marketplace.discovery import discovery_manifest
 from jim.marketplace.mainnet import check_mainnet_readiness
@@ -58,7 +58,8 @@ def _manifest() -> int:
 
 
 def _agent_card() -> int:
-    print(json.dumps(agent_card(), indent=2))
+    # The 1.0 card reflects a base URL; use the configured public URL for the CLI.
+    print(json.dumps(agent_card(get_settings().public_url), indent=2))
     return 0
 
 
