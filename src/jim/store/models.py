@@ -192,3 +192,95 @@ class MonitorRunRow(Base):
     cache_hit: Mapped[bool] = mapped_column(Boolean, default=False)
     data: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+
+
+# --- A2A 1.0: durable paid tasks (see docs/adr/0010) -------------------------
+
+
+class A2APaymentAuthRow(Base):
+    """One payment authorization for an A2A durable task — the verify-then-settle-
+    once record (ADR-0008 extended to A2A).
+
+    ``requirements`` pins the *exact* PaymentRequirements we advertised so a later
+    submitted payload can be checked against it (price-swap defense). The signed
+    ``PaymentPayload`` is persisted ONLY as ``payload_ciphertext`` (Fernet) — it
+    is a bearer settlement instrument and never lives in plaintext. ``status`` is
+    the state machine (required→verified→settling→settled | discarded | expired |
+    settle_failed); the settle-once transition rides a compare-and-swap on it."""
+
+    __tablename__ = "a2a_payment_auths"
+
+    task_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32))  # research|monitor_activation|monitor_release
+    product: Mapped[str] = mapped_column(String(32))
+    identifier: Mapped[str] = mapped_column(String(80))
+    mode: Mapped[str] = mapped_column(String(16))
+    amount_usd: Mapped[float] = mapped_column(Float)
+    requirements: Mapped[dict] = mapped_column(JSON)  # the advertised PaymentRequirements
+    payload_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)  # Fernet(PaymentPayload)
+    payer: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    tx_hash: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
+class A2AWithheldArtifactRow(Base):
+    """A monitor update synthesized but WITHHELD pending payment (Phase 6 / A2A).
+
+    This is the only place pre-payment memo content may live, and it lives here
+    encrypted (``payload_ciphertext``). One withheld artifact per task at a time,
+    so ``id`` IS the task_id. Metadata columns (severity/as_of/price) are the most
+    an unpaid surface may read; the memo itself is only decryptable on release."""
+
+    __tablename__ = "a2a_withheld_artifacts"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # == task_id
+    monitor_id: Mapped[str] = mapped_column(String(64), index=True)
+    severity: Mapped[str] = mapped_column(String(16))
+    as_of: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    price_usd: Mapped[float] = mapped_column(Float)
+    payload_ciphertext: Mapped[str] = mapped_column(Text)  # Fernet(memo payload)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class A2APushConfigRow(Base):
+    """A push-notification config for a task (Phase 5 / A2A). URL + token + auth
+    are encrypted together as one ``config_ciphertext`` blob.
+
+    Composite uniqueness on (task_id, config_id) is realized as a synthetic PK
+    ``id = f"{task_id}:{config_id}"`` so both store backends stay trivial."""
+
+    __tablename__ = "a2a_push_configs"
+
+    id: Mapped[str] = mapped_column(String(160), primary_key=True)  # f"{task_id}:{config_id}"
+    task_id: Mapped[str] = mapped_column(String(64), index=True)
+    config_id: Mapped[str] = mapped_column(String(64))
+    config_ciphertext: Mapped[str] = mapped_column(Text)  # Fernet(url+token+auth)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class A2APushDeadLetterRow(Base):
+    """One exhausted push delivery (Phase 5 / A2A). Append-only audit — like every
+    other ledger in jim, a row is never mutated.
+
+    Deliberately carries NO event body: a dead letter records that a delivery to
+    ``config_id`` for ``task_id`` failed after ``attempts`` tries (with the last
+    error / HTTP status), but must not become a second, unencrypted copy of a paid
+    artifact."""
+
+    __tablename__ = "a2a_push_deadletters"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_id: Mapped[str] = mapped_column(String(64), index=True)
+    config_id: Mapped[str] = mapped_column(String(64))
+    event_type: Mapped[str] = mapped_column(String(32))
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, index=True
+    )
