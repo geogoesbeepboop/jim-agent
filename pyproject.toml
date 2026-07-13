@@ -29,6 +29,11 @@ dependencies = [
     "jsonschema>=4.26.0",
     # Phase 5 — Coinbase CDP mainnet facilitator auth (jim.marketplace.facilitator).
     "cdp-sdk>=1.40.0",
+    "a2a-sdk[fastapi]==1.1.0",
+    # A2A durable paid tasks — Fernet-encrypt payment payloads / withheld artifacts
+    # / push configs at rest (jim.a2a.crypto). eth-account pulls this transitively;
+    # the explicit dep makes the at-rest-encryption dependency first-class.
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]

@@ -240,6 +240,23 @@ class Settings(BaseSettings):
     resilience_breaker_threshold: int = 5
     resilience_breaker_reset_seconds: float = 30.0
 
+    # --- A2A 1.0: durable paid tasks (see docs/adr/0010) -------------------
+    # Activating a monitor over A2A is a one-off charge (mirrors the per-update
+    # price monitor_update_price; the recurring charge stays monitor_update_price).
+    monitor_activation_price: str = "$0.10"  # MONITOR_ACTIVATION_PRICE
+    a2a_enabled: bool = True  # A2A_ENABLED — kill-switch for the /a2a mount
+    a2a_payment_timeout_seconds: int = 900  # A2A_PAYMENT_TIMEOUT_SECONDS — auth expiry ceiling
+    a2a_max_monitors_per_context: int = 5  # A2A_MAX_MONITORS_PER_CONTEXT
+    a2a_monitor_min_interval_seconds: int = 1800  # A2A_MONITOR_MIN_INTERVAL_SECONDS — 30m floor
+    a2a_push_max_attempts: int = 5  # A2A_PUSH_MAX_ATTEMPTS
+    a2a_push_backoff_base_seconds: float = 1.0  # A2A_PUSH_BACKOFF_BASE_SECONDS
+    a2a_push_timeout_seconds: float = 10.0  # A2A_PUSH_TIMEOUT_SECONDS
+    a2a_push_max_body_bytes: int = 65536  # A2A_PUSH_MAX_BODY_BYTES
+    # Fernet key OR arbitrary secret for encrypting A2A payment payloads, withheld
+    # monitor artifacts, and push configs at rest. None → HKDF(evm_private_key) →
+    # ephemeral process key (see jim.a2a.crypto.resolve_key).
+    a2a_encryption_key: str | None = None  # A2A_ENCRYPTION_KEY
+
     @property
     def is_mainnet(self) -> bool:
         return self.network == BASE_MAINNET
