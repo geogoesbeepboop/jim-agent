@@ -6,7 +6,7 @@ payment rails, the sourcing gate, the margin engine, and where "tools" / MCP fit
 > **See it as a whole:** [SYSTEM_MAP.md](SYSTEM_MAP.md) has the full set of Mermaid
 > diagrams (the whole-system picture, the sell/buy payment sequences, discovery,
 > the trust boundary, MCP, monitors). Or run `uv run jim-map` / open `GET /map`
-> for a diagram of your *live* configuration.
+> for a diagram of your _live_ configuration.
 
 > **One-line mental model.** jim is a deterministic pipeline that turns a ticker
 > (or token) into a prose memo in which **every number is provably traceable to a
@@ -100,10 +100,10 @@ Nodes are async; state is a `TypedDict` carried (in memory) through the run.
 
 **Why a fixed graph instead of an LLM agent loop?** Three reasons:
 
-1. **Provability.** The gate must run on *every* output, deterministically. A
+1. **Provability.** The gate must run on _every_ output, deterministically. A
    free-form agent that "decides" when to verify can skip verification.
 2. **Cost control.** Data purchases go through a hard budget cap, not model
-   discretion (§6.1). The model can *want* to buy; only code can spend.
+   discretion (§6.1). The model can _want_ to buy; only code can spend.
 3. **Debuggability & evals.** A fixed topology gives stable trace shapes and a
    meaningful A/B (debate on vs off) — see §11.
 
@@ -112,18 +112,26 @@ scoring faithfulness) and nowhere it could compromise the invariant.
 
 ### Nodes
 
-| Node | File | Role | Model? |
-|---|---|---|---|
-| `gather` | source `.gather()` | identifier → cited `Snapshot` (+ buy upstream) | no |
-| `debate` | [debate.py](../src/jim/research/debate.py) | bull ∥ bear → judge verdict | yes |
-| `synthesize` | [synthesize.py](../src/jim/research/synthesize.py) | facts (+verdict) → cited memo | yes |
-| `gate` | [gate.py](../src/jim/research/gate.py) | verify every figure is sourced | **no** |
-| `judge` | [judge.py](../src/jim/research/judge.py) | faithfulness score, fail-closed | yes |
-| `finalize` | inline | set terminal status | no |
+| Node         | File                                               | Role                                           | Model? |
+| ------------ | -------------------------------------------------- | ---------------------------------------------- | ------ |
+| `gather`     | source `.gather()`                                 | identifier → cited `Snapshot` (+ buy upstream) | no     |
+| `debate`     | [debate.py](../src/jim/research/debate.py)         | bull ∥ bear → judge verdict                    | yes    |
+| `synthesize` | [synthesize.py](../src/jim/research/synthesize.py) | facts (+verdict) → cited memo                  | yes    |
+| `gate`       | [gate.py](../src/jim/research/gate.py)             | verify every figure is sourced                 | **no** |
+| `judge`      | [judge.py](../src/jim/research/judge.py)           | faithfulness score, fail-closed                | yes    |
+| `finalize`   | inline                                             | set terminal status                            | no     |
 
 The `gate → synthesize` back-edge is the self-repair loop: a gate failure feeds
 its violations back as `feedback`, and the synthesizer rewrites (bounded by
 `research_max_attempts`). If it still fails, the run ends `rejected` — never `ok`.
+
+Every LLM node (`debate`, `synthesize`, `judge`) obtains its client from the
+`jim.llm` factory rather than constructing `AsyncAnthropic` inline. That factory
+resolves **dual-mode auth**: `api_key` (raw `anthropic` SDK, the production
+default) or `subscription` (Claude Agent SDK via `claude login`, for the dev-loop
+/ evals only). The seller and monitor entrypoints call `pin_api_key_mode()` at
+startup so paid, third-party-facing output can never be routed through a
+subscription credential — Anthropic ToS, see [ADR-0010](adr/0010-dual-mode-claude-auth-subscription-devloop.md).
 
 ---
 
@@ -165,12 +173,12 @@ class Source(Protocol):
     async def gather(self, identifier, *, budget, store) -> GatherResult: ...
 ```
 
-| Source | Upstream | Paid? | Citation anchor |
-|---|---|---|---|
-| `FundamentalsSource` | SEC EDGAR + Yahoo | free | filing accession / price observation |
-| `GraphSource` | The Graph (Uniswap v3, **multi-chain**) | **x402** | subgraph query (chain-qualified) |
-| `MacroSource` | US gov (Fed / BLS / Treasury) | free | gov release date |
-| `EdgarSource` | SEC EDGAR only | free | filing accession |
+| Source               | Upstream                                | Paid?    | Citation anchor                      |
+| -------------------- | --------------------------------------- | -------- | ------------------------------------ |
+| `FundamentalsSource` | SEC EDGAR + Yahoo                       | free     | filing accession / price observation |
+| `GraphSource`        | The Graph (Uniswap v3, **multi-chain**) | **x402** | subgraph query (chain-qualified)     |
+| `MacroSource`        | US gov (Fed / BLS / Treasury)           | free     | gov release date                     |
+| `EdgarSource`        | SEC EDGAR only                          | free     | filing accession                     |
 
 ### 5.1 EDGAR ([edgar.py](../src/jim/research/edgar.py))
 
@@ -186,7 +194,7 @@ Derived metrics (margins, ROE/ROA, leverage, EBITDA, YoY growth) are computed in
 52-week range, volume, and a daily close series. From these it computes
 **technicals** (SMA50/200, RSI, MACD via [indicators.py](../src/jim/research/indicators.py))
 and **market-derived metrics** (Market Cap, P/E TTM, P/B, dividend yield) that
-cite *both* the price and the EDGAR input. Best-effort: a feed failure degrades
+cite _both_ the price and the EDGAR input. Best-effort: a feed failure degrades
 to EDGAR-only rather than failing the run.
 
 > **Provenance caveat.** EDGAR is public domain; market price feeds carry ToS.
@@ -203,7 +211,7 @@ wirings selected by `GRAPH_LIVE`:
 - `GRAPH_LIVE=false` → local `/mock-graph` vendor on **Base Sepolia** (free testnet USDC).
 
 The mock ([vendor/mock_graph.py](../src/jim/vendor/mock_graph.py)) returns the
-*identical* JSON shape, so the parser is the same either way. (The real gateway
+_identical_ JSON shape, so the parser is the same either way. (The real gateway
 only settles on mainnet — there is no testnet endpoint, confirmed by probing —
 which is why the mock exists for verification.)
 
@@ -232,9 +240,9 @@ the economics and what was refused (proprietary transcripts / EPS estimates).
 
 ### 5.5 Resilience ([net/resilience.py](../src/jim/net/resilience.py)) — Phase 6
 
-jim already degrades well by *absence* (no key → deterministic fallback, no DB →
+jim already degrades well by _absence_ (no key → deterministic fallback, no DB →
 memory store, no Yahoo → EDGAR-only); `resilient_call` adds degradation by
-*failure*. Every free upstream request (EDGAR ticker map + companyfacts, Yahoo
+_failure_. Every free upstream request (EDGAR ticker map + companyfacts, Yahoo
 chart, the three macro agencies) **and** every paid x402 buy (`procure()` in
 [sources/base.py](../src/jim/sources/base.py) — The Graph, peer agents) runs
 under one small helper: a wall-clock timeout per attempt, bounded retries with
@@ -272,14 +280,14 @@ procure():
 ```
 
 `BudgetCap` holds a **hard per-query ceiling** on data spend. The source
-*proposes* (it reasons about cost-vs-value); the budget *disposes* (code enforces
+_proposes_ (it reasons about cost-vs-value); the budget _disposes_ (code enforces
 the ceiling). This is the same split as the gate: model wants, code decides.
 
 **The dynamic-price guard (ADR-0007).** The x402 price is set by the seller in the
-402 header and is *not* pre-published. `propose()` only checks the *estimate*; the
-guard checks what the seller *actually* advertises. `procure` passes the remaining
+402 header and is _not_ pre-published. `propose()` only checks the _estimate_; the
+guard checks what the seller _actually_ advertises. `procure` passes the remaining
 ceiling as `max_price_usd`, so the unpaid pre-flight refuses an over-cap price
-*before* any settlement (`PriceCapExceeded`, surfaced as `BudgetExceeded`). This is
+_before_ any settlement (`PriceCapExceeded`, surfaced as `BudgetExceeded`). This is
 what keeps jim from overpaying on mainnet, where the price is real USDC.
 `scripts/graph_probe.py` is the pre-cutover audit: it decodes the live price and
 PASS/FAILs it against the same ceiling.
@@ -290,7 +298,7 @@ Wraps the V2 `x402HttpxClient`. `pay()` supports GET/POST+JSON (GraphQL) and
 returns the body **plus `cost_in_usd` and the settlement tx hash**. It learns the
 price with a cheap **unpaid pre-flight** (the seller returns 402 before doing any
 work, so we read the advertised amount), then makes the paying request. The read
-timeout is generous (a paid call buys *work*, often tens of seconds).
+timeout is generous (a paid call buys _work_, often tens of seconds).
 
 ### 6.3 Store ([store/](../src/jim/store/))
 
@@ -325,7 +333,7 @@ margin — the "buy once, resell many" economics. The dashboard
    "RSI is 62.5 [C30]"), skipping any that overlap a Pass-A match. This catches
    indicators with no `$`/`%`/`x` marker.
 4. Each figure must match — within `max(2% relative, 0.05 absolute)` and a
-   compatible unit — at least one fact cited *in the same segment*. Otherwise:
+   compatible unit — at least one fact cited _in the same segment_. Otherwise:
    **uncited** (no citation present) or **value mismatch** (cited, doesn't match).
 
 A run **passes** iff there are zero violations. The result reports `coverage`
@@ -375,7 +383,7 @@ regardless of what the model would prefer to do. So jim has **function-level
 tools** (the source `.gather()`, `procure()`, `check_sourcing()`, `pay()`,
 `compute_indicators()`), but no model-driven tool-calling on the critical path.
 
-Where the model *does* have latitude, it's sandboxed: the synthesizer can write
+Where the model _does_ have latitude, it's sandboxed: the synthesizer can write
 any prose it likes, but the gate vetoes any unsourced number; the bull/bear
 agents can argue anything, but their numbers must still be facts.
 
@@ -384,7 +392,7 @@ agents can argue anything, but their numbers must still be facts.
 The natural place is **inside a node**, never as the orchestrator. For example, a
 future `gather` could let the model emit a structured "data request" (which
 metrics it wants) that deterministic code then fulfills and budget-checks — the
-model proposing a *shopping list*, code disposing the *purchases*. The Anthropic
+model proposing a _shopping list_, code disposing the _purchases_. The Anthropic
 SDK's tool-use (with `StructuredOutput`-style schemas) is the mechanism; the
 propose/dispose boundary stays in code. The judge and debate could likewise emit
 structured verdicts via a tool schema instead of parsed JSON.
@@ -446,7 +454,8 @@ and gate merges (any failing case exits 1):
   I/O seams (fake source, scripted synthesizer, in-memory store). Pins the
   retry loop, the memo cache, fail-closed error paths, margin accounting, and
   the **never-bill-rejected invariant asserted at the ledger** (ADR-0008).
-- **live** (needs `ANTHROPIC_API_KEY`): held-out tickers through the real
+- **live** (needs an LLM credential — `ANTHROPIC_API_KEY`, or `--auth-mode
+subscription` via `claude login`): held-out tickers through the real
   pipeline, **single-pass vs debate** (memo cache off), each run scored by the
   ADR-0006 rubric and measured for latency, tokens, and $ cost; `--repeats N`
   for variance. Aggregates also log to Langfuse when configured.
@@ -499,7 +508,7 @@ number true?" — see [ADR-0001](adr/0001-deterministic-materiality-gate.md).
 ### 12.2 The diff and the crew
 
 [diff.py](../src/jim/monitors/diff.py) compares a monitor's compact stored
-*baseline* (last facts seen) to the fresh snapshot: per-label value deltas
+_baseline_ (last facts seen) to the fresh snapshot: per-label value deltas
 (abs + %), newly-appeared / removed metrics, new SEC accessions, and whether the
 reporting date advanced. No thresholds — pure arithmetic.
 
@@ -507,7 +516,7 @@ reporting date advanced. No thresholds — pure arithmetic.
 of pure functions, each reading the diff and emitting cited
 [`Signal`](../src/jim/monitors/models.py)s — `price_move` (≥ X%), `metric_change`
 (≥ X% or ≥ abs), `threshold` (direction-aware crossings like RSI 70/30 that fire
-only on the *cross*, not while parked past the line), `ma_cross` (50/200
+only on the _cross_, not while parked past the line), `ma_cross` (50/200
 golden/death), `new_filing`. Each signal carries the `[C#]` ids that back it, so
 an update can cite them and the gate can verify them. A watcher is a pure
 function added to the registry — no model, no I/O.
@@ -517,11 +526,11 @@ function added to the registry — no model, no I/O.
 [materiality.py](../src/jim/monitors/materiality.py) `assess()` filters signals
 by a **severity floor** (`info < notable < critical`) and a **per-signal
 cooldown** (don't re-alert the same key within a window), and reports
-`material`. Because this is deterministic, *most polls are quiet and cost
-nothing*: a quiet run pays only for data (usually $0 via the cache) and **$0
+`material`. Because this is deterministic, _most polls are quiet and cost
+nothing_: a quiet run pays only for data (usually $0 via the cache) and **$0
 inference**. The dashboard surfaces this as `inference_saved_usd` — the estimated
 inference the gate avoided by not writing on quiet polls. This is the monitoring
-analog of "buy a datum once, resell many" (§6.3): *write only when there's news.*
+analog of "buy a datum once, resell many" (§6.3): _write only when there's news._
 
 ### 12.4 The update — gated, impersonal, key-optional
 
@@ -532,7 +541,7 @@ the published signals + current facts. It must pass **both** the sourcing gate
 address, advice, buy/sell/hold, price targets — the "stays general, not
 personalized" rule, enforced not just prompted). A failure retries with feedback,
 then falls back to a memo built straight from each signal's cited fact — gate-safe
-*by construction*. So, exactly like the sourcing gate, **monitors run with no API
+_by construction_. So, exactly like the sourcing gate, **monitors run with no API
 key**; the key only buys nicer prose.
 
 ### 12.5 Delivery and the scheduler
@@ -544,7 +553,7 @@ headers: `X-Jim-Timestamp` (unix seconds), `X-Jim-Nonce` (uuid4 hex), and
 tampering with any of the three breaks verification and a captured delivery
 can't be replayed. Subscribers verify with `verify_delivery()` (constant-time
 compare, staleness window, optional nonce dedup). The store is always the system
-of record, so a pull *feed* exists regardless of channels. Delivery is
+of record, so a pull _feed_ exists regardless of channels. Delivery is
 best-effort: a failing channel is logged, not fatal.
 
 [scheduler.py](../src/jim/monitors/scheduler.py) is a dependency-free asyncio
@@ -558,8 +567,8 @@ one-file swap if fan-out/exactly-once ever demands it — see
 
 ### 12.6 Natural-language monitors (propose / dispose)
 
-[nl.py](../src/jim/monitors/nl.py) turns *"watch AAPL for big earnings moves and
-overbought RSI"* into validated triggers. With a key, the model **proposes** a
+[nl.py](../src/jim/monitors/nl.py) turns _"watch AAPL for big earnings moves and
+overbought RSI"_ into validated triggers. With a key, the model **proposes** a
 structured spec via tool-use; with no key, a deterministic keyword parser does
 the same. Either way `validate_triggers` **disposes** — every proposed trigger is
 checked against the real registry and its thresholds clamped before it can run.
@@ -619,35 +628,35 @@ src/jim/
 
 ## 14. Key design decisions
 
-| Decision | Why |
-|---|---|
-| Deterministic gate, no LLM | The trust property must be reproducible/auditable. |
-| Fixed LangGraph topology over agent loop | Guarantees verification + budget run every time. |
-| Propose/dispose for spend | Model can want; only code can spend (no runaway buys). |
-| Local key (not CDP) for now | Fewest moving parts to prove the rails; CDP slots in later. |
-| Native judge over DeepEval in Phase 1 | Ships now; DeepEval becomes the Phase-3 regression harness. |
-| Real Graph (mainnet) + testnet mock | Graph is mainnet-only; mock proves economics for free. |
-| Yahoo for prices (flagged) | Free + keyless to demo technicals; licensed feed swaps in. |
-| pgvector with local embeddings | Proves the vector path with zero external API; real model drops in. |
-| Deterministic materiality gate, no LLM ([ADR-0001](adr/0001-deterministic-materiality-gate.md)) | Alerts must be reproducible; quiet polls must cost $0 inference. |
-| Lightweight asyncio scheduler ([ADR-0002](adr/0002-lightweight-asyncio-scheduler.md)) | Durability lives in the store; APScheduler/Temporal is a one-file swap later. |
-| Gate-safe deterministic update fallback | Monitors work with no API key, like the sourcing gate; the key only buys prose. |
-| Impersonal guard (deterministic) | "Stays general, not personalized" is enforced, not just prompted. |
-| Native x402 Bazaar discovery + one catalog ([ADR-0003](adr/0003-bazaar-discovery.md)) | Ride the ecosystem's index rail, not a bespoke registry; one source of truth so nothing drifts. |
-| Ref-free advertised output schema ([ADR-0003](adr/0003-bazaar-discovery.md)) | A nested `$ref` dangles and indexers reject the listing; inline keeps it valid anywhere. |
-| Read-only mainnet preflight (no auto-spend) ([ADR-0004](adr/0004-mainnet-cutover-and-ui-self-pay.md)) | The one irreversible step gets a dry-run that can't fire the gun. |
-| UI self-pay when funded, else preview ([ADR-0004](adr/0004-mainnet-cutover-and-ui-self-pay.md)) | A wallet-less visitor still exercises the real rail; honest about preview vs paid. |
-| Rejected research is refused, never billed ([ADR-0008](adr/0008-agent-economy-trust-callchain-billing.md)) | The x402 middleware only settles 2xx; a 502 refusal cancels the verified payment. |
-| The gate as composition firewall ([ADR-0008](adr/0008-agent-economy-trust-callchain-billing.md)) | Peer facts face the same value-match as EDGAR facts — buy from anyone, ship only what verifies. |
-| Trust = gate pass-rate, not reviews ([ADR-0008](adr/0008-agent-economy-trust-callchain-billing.md)) | Reputation computed from outcomes jim observed itself; refuses to keep paying unverifiable peers. |
-| Call-chain refusal before the paywall ([ADR-0008](adr/0008-agent-economy-trust-callchain-billing.md)) | Payment loops and runaway depth are graph properties; refuse at 409 before money moves. |
+| Decision                                                                                                   | Why                                                                                               |
+| ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Deterministic gate, no LLM                                                                                 | The trust property must be reproducible/auditable.                                                |
+| Fixed LangGraph topology over agent loop                                                                   | Guarantees verification + budget run every time.                                                  |
+| Propose/dispose for spend                                                                                  | Model can want; only code can spend (no runaway buys).                                            |
+| Local key (not CDP) for now                                                                                | Fewest moving parts to prove the rails; CDP slots in later.                                       |
+| Native judge over DeepEval in Phase 1                                                                      | Ships now; DeepEval becomes the Phase-3 regression harness.                                       |
+| Real Graph (mainnet) + testnet mock                                                                        | Graph is mainnet-only; mock proves economics for free.                                            |
+| Yahoo for prices (flagged)                                                                                 | Free + keyless to demo technicals; licensed feed swaps in.                                        |
+| pgvector with local embeddings                                                                             | Proves the vector path with zero external API; real model drops in.                               |
+| Deterministic materiality gate, no LLM ([ADR-0001](adr/0001-deterministic-materiality-gate.md))            | Alerts must be reproducible; quiet polls must cost $0 inference.                                  |
+| Lightweight asyncio scheduler ([ADR-0002](adr/0002-lightweight-asyncio-scheduler.md))                      | Durability lives in the store; APScheduler/Temporal is a one-file swap later.                     |
+| Gate-safe deterministic update fallback                                                                    | Monitors work with no API key, like the sourcing gate; the key only buys prose.                   |
+| Impersonal guard (deterministic)                                                                           | "Stays general, not personalized" is enforced, not just prompted.                                 |
+| Native x402 Bazaar discovery + one catalog ([ADR-0003](adr/0003-bazaar-discovery.md))                      | Ride the ecosystem's index rail, not a bespoke registry; one source of truth so nothing drifts.   |
+| Ref-free advertised output schema ([ADR-0003](adr/0003-bazaar-discovery.md))                               | A nested `$ref` dangles and indexers reject the listing; inline keeps it valid anywhere.          |
+| Read-only mainnet preflight (no auto-spend) ([ADR-0004](adr/0004-mainnet-cutover-and-ui-self-pay.md))      | The one irreversible step gets a dry-run that can't fire the gun.                                 |
+| UI self-pay when funded, else preview ([ADR-0004](adr/0004-mainnet-cutover-and-ui-self-pay.md))            | A wallet-less visitor still exercises the real rail; honest about preview vs paid.                |
+| Rejected research is refused, never billed ([ADR-0008](adr/0008-agent-economy-trust-callchain-billing.md)) | The x402 middleware only settles 2xx; a 502 refusal cancels the verified payment.                 |
+| The gate as composition firewall ([ADR-0008](adr/0008-agent-economy-trust-callchain-billing.md))           | Peer facts face the same value-match as EDGAR facts — buy from anyone, ship only what verifies.   |
+| Trust = gate pass-rate, not reviews ([ADR-0008](adr/0008-agent-economy-trust-callchain-billing.md))        | Reputation computed from outcomes jim observed itself; refuses to keep paying unverifiable peers. |
+| Call-chain refusal before the paywall ([ADR-0008](adr/0008-agent-economy-trust-callchain-billing.md))      | Payment loops and runaway depth are graph properties; refuse at 409 before money moves.           |
 
 ---
 
 ## 15. Marketplace, discovery & MCP (Phase 5)
 
-[marketplace/](../src/jim/marketplace/). Phase 5 makes jim *findable and payable
-by other agents*, publishes a price schedule, exposes jim over MCP, lets a human
+[marketplace/](../src/jim/marketplace/). Phase 5 makes jim _findable and payable
+by other agents_, publishes a price schedule, exposes jim over MCP, lets a human
 buy through a browser, renders the system as a whole, and guards the cutover to
 real money. See [SYSTEM_MAP.md](SYSTEM_MAP.md) for the diagrams and
 [ADR-0003](adr/0003-bazaar-discovery.md)/[ADR-0004](adr/0004-mainnet-cutover-and-ui-self-pay.md).
@@ -686,7 +695,7 @@ product as an **x402-gated FastMCP tool** via `x402.mcp.create_payment_wrapper`,
 reusing the same facilitator + EXACT-EVM scheme as the HTTP seller, so MCP and HTTP
 settle identically. The tool handler is just another caller of `run_research` —
 the sourcing gate and budget are unchanged. `mcp` is an optional extra; the tool
-*surface* (`mcp_tool_catalog`) is pure and always importable for discovery + tests.
+_surface_ (`mcp_tool_catalog`) is pure and always importable for discovery + tests.
 
 ### 15.5 The human UI
 
@@ -725,7 +734,7 @@ and [AGENT_INTEROP.md](AGENT_INTEROP.md); the shape:
 
 ### 16.1 Source-as-agent ([sources/peer.py](../src/jim/sources/peer.py))
 
-`PeerSource` is a `Source` (§5) whose upstream is *another agent*: it buys a
+`PeerSource` is a `Source` (§5) whose upstream is _another agent_: it buys a
 facts payload (bare `facts` list or a jim-shaped `citations` list) over x402,
 through the **same** `procure()` → budget → cache path as The Graph — so the
 per-query ceiling, the dynamic-price cap (ADR-0007), and buy-once-resell-many
@@ -752,14 +761,14 @@ jim's native reputation primitive: verification, not reviews.
 Every buy stamps `X-Jim-Call-Chain` (the paying agents so far + jim). The
 seller's **outermost** middleware refuses — 409, before the paywall verifies
 anything — a chain that already contains jim's address (a payment loop) or one
-at `CALL_CHAIN_MAX_DEPTH`; the buyer refuses to *extend* a chain past the same
+at `CALL_CHAIN_MAX_DEPTH`; the buyer refuses to _extend_ a chain past the same
 ceiling. Deterministic, cooperative, and bounded to what jim controls: its own
 spend and its own participation in cycles.
 
 ### 16.4 The billing invariant ([seller/app.py](../src/jim/seller/app.py) `_deliver_or_refuse`)
 
 The x402 middleware settles only 2xx responses. A run the gates rejected is
-therefore *refused*: HTTP 502 with structured diagnostics (the verified payment
+therefore _refused_: HTTP 502 with structured diagnostics (the verified payment
 is cancelled — the buyer keeps their money), the MCP tool raises, the UI
 preview declines to render, and the engine books \$0 revenue so the margin
 ledger shows the loss. "Paid but rejected" — our first mainnet settlement — is
@@ -770,4 +779,4 @@ no longer a reachable state.
 `GET /.well-known/agent-card.json` publishes an A2A-style card — skills derived
 from the same catalog as everything else (§15.1), an x402 payment binding, and
 jim's trust/call-chain contract — linked from the `/.well-known/x402` manifest.
-MCP exposes *tools*; the card is what lets a peer *delegate a task*.
+MCP exposes _tools_; the card is what lets a peer _delegate a task_.

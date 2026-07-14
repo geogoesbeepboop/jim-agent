@@ -15,9 +15,8 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
-from anthropic import AsyncAnthropic
-
 from jim.config import get_settings
+from jim.llm import LLMClient, build_llm_client, live_llm_available
 from jim.research.cost import Usage
 from jim.research.facts import Snapshot
 
@@ -59,29 +58,21 @@ class DebateResult:
         )
 
 
-async def _ask(client: AsyncAnthropic, model: str, system: str, user: str) -> tuple[str, Usage]:
-    resp = await client.messages.create(
-        model=model,
-        max_tokens=600,
-        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": user}],
-    )
-    text = "".join(b.text for b in resp.content if b.type == "text").strip()
-    usage = Usage(
-        model=model, input_tokens=resp.usage.input_tokens, output_tokens=resp.usage.output_tokens
-    )
-    return text, usage
+async def _ask(client: LLMClient, model: str, system: str, user: str) -> tuple[str, Usage]:
+    resp = await client.complete(model=model, system=system, user=user, max_tokens=600)
+    return resp.text, resp.usage
 
 
 async def run_debate(snapshot: Snapshot) -> DebateResult:
     """Run bull ∥ bear, then the judge. Returns the verdict + token usage."""
     settings = get_settings()
-    if not settings.anthropic_api_key:
+    if not live_llm_available():
         raise RuntimeError(
-            "ANTHROPIC_API_KEY is not set — the debate needs it (or set ENABLE_DEBATE=false). "
-            "The deterministic sourcing gate runs without any key."
+            "no LLM credential — the debate needs ANTHROPIC_API_KEY, or "
+            "LLM_AUTH_MODE=subscription with `claude login` (or set ENABLE_DEBATE=false). "
+            "The deterministic sourcing gate runs without any credential."
         )
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+    client = build_llm_client()
     model = settings.debate_model
     facts = (
         f"Company: {snapshot.entity_name} ({snapshot.ticker})\n\nFACTS:\n{snapshot.facts_block()}"

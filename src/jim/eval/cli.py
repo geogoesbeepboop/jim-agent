@@ -147,12 +147,14 @@ def _cmd_run(args) -> int:
     else:
         names = [args.suite]
 
-    if "live" in names:
-        from jim.config import get_settings
+    from jim.llm import live_llm_available, set_auth_mode
 
-        if not get_settings().anthropic_api_key:
+    set_auth_mode(getattr(args, "auth_mode", None))
+    if "live" in names:
+        if not live_llm_available():
             print(
-                "jim-eval: the live suite needs ANTHROPIC_API_KEY; running offline suites only.",
+                "jim-eval: the live suite needs an LLM credential (ANTHROPIC_API_KEY, or "
+                "--auth-mode subscription with `claude login`); running offline suites only.",
                 file=sys.stderr,
             )
             names = [n for n in names if n != "live"]
@@ -286,6 +288,13 @@ def main() -> int:
         "--repeats", type=int, default=1, help="live repeats per (ticker, variant) for variance"
     )
     p_run.add_argument("--no-save", action="store_true", help="don't persist this run")
+    p_run.add_argument(
+        "--auth-mode",
+        choices=["api_key", "subscription", "auto"],
+        default=None,
+        help="LLM auth for the live suite (default: LLM_AUTH_MODE / api_key). "
+        "subscription uses `claude login` via the Claude Agent SDK — dev-loop only.",
+    )
     p_run.add_argument(
         "--compare-baseline",
         action="store_true",

@@ -134,6 +134,13 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     """
     settings = settings or get_settings()
 
+    # Defense-in-depth: constructing the paid seller app pins API-key auth, so no
+    # deployment path (uvicorn factory, ASGI mount) can route paid output through a
+    # subscription credential. See jim.llm.pin_api_key_mode.
+    from jim.llm import pin_api_key_mode
+
+    pin_api_key_mode()
+
     if not settings.evm_address:
         raise ValueError("EVM_ADDRESS is not set. Run `uv run jim-wallet new` and add it to .env.")
 
@@ -481,6 +488,11 @@ def run() -> None:
     """Console entry point: ``uv run jim-seller``."""
     import uvicorn
 
+    # The seller serves paid, third-party-facing research — pin API-key auth so a
+    # subscription credential can never back it (Anthropic ToS + AGENTS.md invariant).
+    from jim.llm import pin_api_key_mode
+
+    pin_api_key_mode()
     settings = get_settings()
     uvicorn.run(
         build_app(settings),

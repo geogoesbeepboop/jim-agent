@@ -49,6 +49,13 @@ eval = [
 mcp = [
     "mcp>=1.0",
 ]
+# Dual-mode Claude auth (jim.llm): run evals / local jim-research under your Claude
+# subscription via `claude login` instead of spending API credits. Dev-loop only —
+# never the seller/monitor paths. The default api_key path and the offline suite
+# need none of this.
+subscription = [
+    "claude-agent-sdk>=0.1.0",
+]
 
 [project.scripts]
 jim-seller = "jim.seller.app:run"

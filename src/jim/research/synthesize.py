@@ -13,9 +13,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from anthropic import AsyncAnthropic
-
 from jim.config import get_settings
+from jim.llm import build_llm_client, live_llm_available
 from jim.research.cost import Usage
 from jim.research.facts import Snapshot
 
@@ -85,31 +84,23 @@ async def synthesize(
     feedback: str | None = None,
     debate: str | None = None,
 ) -> SynthResult:
-    """Generate a cited memo. Raises if no ANTHROPIC_API_KEY is configured."""
+    """Generate a cited memo. Raises if no LLM credential is configured.
+
+    Auth (API key vs subscription) is resolved by :func:`jim.llm.build_llm_client`.
+    """
     settings = get_settings()
-    if not settings.anthropic_api_key:
+    if not live_llm_available():
         raise RuntimeError(
-            "ANTHROPIC_API_KEY is not set — the synthesizer needs it. "
-            "(The deterministic sourcing gate, however, runs without any key.)"
+            "no LLM credential — the synthesizer needs ANTHROPIC_API_KEY, or "
+            "LLM_AUTH_MODE=subscription with `claude login`. (The deterministic "
+            "sourcing gate, however, runs without any credential.)"
         )
 
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
-    resp = await client.messages.create(
+    client = build_llm_client()
+    resp = await client.complete(
         model=settings.research_model,
+        system=_SYSTEM,
+        user=_user_message(snapshot, mode, feedback, debate),
         max_tokens=1500,
-        system=[
-            {
-                "type": "text",
-                "text": _SYSTEM,
-                "cache_control": {"type": "ephemeral"},  # static rules → cache across calls
-            }
-        ],
-        messages=[{"role": "user", "content": _user_message(snapshot, mode, feedback, debate)}],
     )
-    memo = "".join(block.text for block in resp.content if block.type == "text").strip()
-    usage = Usage(
-        model=settings.research_model,
-        input_tokens=resp.usage.input_tokens,
-        output_tokens=resp.usage.output_tokens,
-    )
-    return SynthResult(memo=memo, usage=usage)
+    return SynthResult(memo=resp.text, usage=resp.usage)

@@ -11,7 +11,7 @@ works (pipeline, sources, the gate, payments, tools/MCP, evals), and
 in Mermaid (or run `uv run jim-map` for your live config).
 
 Looking forward: **[docs/NORTH_STAR.md](docs/NORTH_STAR.md)** is the strategy —
-jim as the *verifiable delivery* layer of agentic commerce — with
+jim as the _verifiable delivery_ layer of agentic commerce — with
 **[docs/DEPLOY.md](docs/DEPLOY.md)** (the go-live runbook) and
 **[docs/LAUNCH.md](docs/LAUNCH.md)** (the demo + listings kit) as its Horizon 1
 arms; **[docs/ROADMAP.md](docs/ROADMAP.md)** is the buildable backlog;
@@ -105,7 +105,7 @@ docker-compose.yml      # local Postgres + pgvector
 Every number jim publishes is a `Fact` carrying the SEC accession of the filing
 it came from. After the model writes a memo, [gate.py](src/jim/research/gate.py)
 **deterministically** checks that every dollar amount, percentage, and ratio in
-the prose sits next to a `[C#]` citation whose fact value *matches it* within a
+the prose sits next to a `[C#]` citation whose fact value _matches it_ within a
 rounding tolerance. A fabricated number has no fact it matches, so it can't be
 covered — the run is rejected and never billed as `ok`. No model is in this loop,
 so the verdict is reproducible and auditable.
@@ -135,6 +135,9 @@ A `✅` from step 4 with a settlement receipt = Phase 0 exit criterion met.
 
 ```bash
 # Set ANTHROPIC_API_KEY in .env (the synthesizer needs it; the gate does not).
+# Or run locally on your Claude subscription instead of API credits (dev-loop only,
+# see ADR-0010): uv sync --extra subscription && claude login, then add --auth-mode
+# subscription below (also works for `jim-eval run --suite live`).
 
 # Run the engine locally — no payment, prints memo + gate verdict + citations
 uv run jim-research AAPL
@@ -170,7 +173,7 @@ Four upgrades to "is the answer good?" — see
   fingerprint and correctly re-synthesizes, so the cache only hits when nothing
   changed. The gate re-check means a cached memo can never ship unsourced.
 - **Completeness check.** The gate's mirror image — it flags **material** snapshot
-  facts the memo *omitted* (deterministic, no key). A signal, not a gate: it lowers
+  facts the memo _omitted_ (deterministic, no key). A signal, not a gate: it lowers
   the quality score and is surfaced, but never rejects a run.
 - **Structured judge.** The faithfulness judge returns a **per-claim checklist**
   (each claim → supported? which citation? why), and high-stakes runs upgrade to a
@@ -185,6 +188,7 @@ uv run jim-research AAPL --no-cache       # force a fresh synthesis
 uv run jim-research NVDA --high-stakes    # upgrade the faithfulness judge to Sonnet
 uv run jim-eval run --suite live AAPL MSFT  # live report: material coverage + composite rubric
 ```
+
 > New tables: run `uv run jim-initdb` once to create `memo_cache` (and, for
 > Phase 7, `source_trust_events`) — a no-op for tables that already exist.
 
@@ -345,7 +349,7 @@ Three deterministic guards make composition safe (model proposes, code disposes)
   ship what it can verify.
 - **Trust = verification.** Every gated run credits/debits the sources whose
   facts it used; the Laplace-smoothed pass-rate is the score. Peers below
-  `PEER_TRUST_FLOOR` are refused *before* payment. No reviews, no ratings —
+  `PEER_TRUST_FLOOR` are refused _before_ payment. No reviews, no ratings —
   outcomes jim observed itself.
 - **The call chain is bounded.** Buys carry `X-Jim-Call-Chain`; the seller
   refuses payment loops (our address already in the chain) and over-depth
@@ -353,7 +357,7 @@ Three deterministic guards make composition safe (model proposes, code disposes)
 
 ## Billing invariant: rejected research is never billed
 
-The x402 middleware only settles 2xx responses — so the seller now *refuses*
+The x402 middleware only settles 2xx responses — so the seller now _refuses_
 gate-rejected runs (HTTP 502 + diagnostics, MCP tool error, UI "not billed"
 notice), which cancels the verified payment. The engine books rejected runs at
 $0 revenue, so `/dashboard` shows the true loss. This closes the incident from
@@ -389,11 +393,11 @@ lying-peer trust-decay beat, `MOCK_PEER_CORRUPT=true`) lives in
 
 Every x402 payment that settles at the paywall is recorded as an **on-chain audit
 receipt** — buyer address, settlement tx hash, settled USDC, and which query —
-captured by a thin middleware that decodes the settlement header *after* the
+captured by a thin middleware that decodes the settlement header _after_ the
 handler returns (the only point where the tx hash exists). It's append-only and
 best-effort: a store outage is logged and swallowed, never blocking a paid
 delivery. This is deliberately separate from the margin ledger — settlement
-(*who paid us, on which tx*) vs. economics (*margin per query*).
+(_who paid us, on which tx_) vs. economics (_margin per query_).
 
 ```bash
 uv run jim-admin                 # revenue · unique buyers · per-tx audit trail (CLI)
@@ -408,6 +412,7 @@ with wallet** action; **agents still get the machine-readable 402** (the paywall
 is gated on a browser `Accept` + UA), so nothing about the agent path changes. No
 new config or hand-rolled crypto. See
 [ADR-0005](docs/adr/0005-settlement-audit-and-browser-wallet.md).
+
 > New table: run `uv run jim-initdb` once to create `payment_receipts` before the
 > admin view populates (no-op if it already exists).
 

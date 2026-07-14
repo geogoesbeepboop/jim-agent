@@ -163,6 +163,11 @@ async def _run_all(args) -> int:
 
 
 async def _serve(args) -> int:
+    # Monitors deliver paid updates to subscribers — pin API-key auth so a
+    # subscription credential can never back that output (ToS + AGENTS.md).
+    from jim.llm import pin_api_key_mode
+
+    pin_api_key_mode()
     sched = MonitorScheduler(store=get_store(), deliver=not args.no_deliver)
     poll = args.interval
     print(f"Scheduler running (poll every {poll}s). Ctrl-C to stop.", flush=True)
