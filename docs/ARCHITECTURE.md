@@ -438,22 +438,28 @@ Every Langfuse call is guarded so tracing can never break a run.
 
 [eval/](../src/jim/eval/), run via `jim-eval` — the harness that answers "is
 jim improving?" with persisted, comparable numbers. See
-[ADR-0009](adr/0009-eval-harness-persisted-runs-tiered-suites.md).
+[ADR-0009](adr/0009-eval-harness-persisted-runs-tiered-suites.md) for the
+design and [EVAL_LADDER.md](EVAL_LADDER.md) for the maturity roadmap
+(L0 verifier tests → L3 production sampling).
 
 Four suites, cheapest first; the offline three are deterministic, need no key,
-and gate merges (any failing case exits 1):
+and gate merges (any failing case exits 1). Counts drift as the suites grow —
+`jim-eval run` output is the source of truth:
 
-- **gate** (offline): 38 labeled memos covering the extractor's whole surface —
+- **gate** (offline): labeled memos covering the extractor's whole surface —
   for every notation the gate understands, a truthful phrasing it must pass and
-  a planted lie it must reject. A regression in either direction is a named case.
-- **guards** (offline): 40 cases over the other deterministic rails — the
+  a planted lie it must reject (plus an adversarial/injection block). A
+  regression in either direction is a named case.
+- **guards** (offline): the other deterministic rails — the
   impersonal guard, identifier canonicalization (hostile input must refuse),
   the completeness check, monitor materiality (floors + cooldowns), and the
   monitor-NL propose/dispose validation (unknown kinds dropped, params clamped).
 - **scenarios** (offline): the real LangGraph engine end-to-end with scripted
-  I/O seams (fake source, scripted synthesizer, in-memory store). Pins the
-  retry loop, the memo cache, fail-closed error paths, margin accounting, and
-  the **never-bill-rejected invariant asserted at the ledger** (ADR-0008).
+  I/O seams (fake source, scripted synthesizer, scriptable judge, in-memory
+  store). Pins the retry loop, the memo cache, fail-closed error paths, margin
+  accounting asserted at the ledger, the **never-bill-rejected invariant**
+  (ADR-0008) for both gate and judge rejections, and the ok/rejected
+  conjunction itself (gate AND judge).
 - **live** (needs an LLM credential — `ANTHROPIC_API_KEY`, or `--auth-mode
 subscription` via `claude login`): held-out tickers through the real
   pipeline, **single-pass vs debate** (memo cache off), each run scored by the

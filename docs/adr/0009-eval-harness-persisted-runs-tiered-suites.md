@@ -129,3 +129,21 @@ the suites it displays.
 | Rows in the Postgres store | Couples the harness to the product's schema and to having a DB; files are diffable and machine-portable. |
 | DeepEval / promptfoo harness | The scoring that matters here is jim's own deterministic gate + rubric; a framework adds deps without adding verdicts. |
 | Injection parameters on `run_research` for scenario seams | Widens the production API for eval-only needs; the test-proven monkeypatch seams already exist. |
+
+## Addendum — 2026-07-14: the suites grew; counts live in the code
+
+The case counts above are the numbers *at acceptance* and have drifted twice
+since: the adversarial/injection block grew the gate suite 38 → 48 and added a
+tenth scenario (`injected_source_cannot_bypass_gate_or_billing`), and the
+eval-ladder work (see `docs/EVAL_LADDER.md`) added an eleventh
+(`judge_fail_rejects_and_never_bills`) — closing the one L0 gap this harness
+had: the `gate AND judge` rejection conjunction in `engine.py` was previously
+never exercised with a failing judge verdict anywhere offline. Current totals:
+48 gate + 40 guards + 11 scenarios = 99 offline cases. Treat the datasets
+themselves (`src/jim/eval/dataset*.py`, `scenarios.py`) and `jim-eval run`
+output as the source of truth for counts, not this ADR.
+
+The eval maturity roadmap — judge calibration (which will revisit the
+"eval traffic is visible in `/proof`" consequence above via a future ADR),
+live-suite activation, and production trace sampling — is
+`docs/EVAL_LADDER.md`.

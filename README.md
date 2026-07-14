@@ -420,17 +420,18 @@ new config or hand-rolled crypto. See
 
 Every property jim sells — lies blocked, tone impersonal, rejected runs never
 billed — plus quality/cost/latency, measured per run and tracked over time. See
-[ADR-0009](docs/adr/0009-eval-harness-persisted-runs-tiered-suites.md).
+[ADR-0009](docs/adr/0009-eval-harness-persisted-runs-tiered-suites.md) for the
+design and [EVAL_LADDER.md](docs/EVAL_LADDER.md) for the eval maturity roadmap.
 
 ```bash
-uv run jim-eval                            # offline suites (87 cases, ~1.5s, no key/DB/network):
-                                           #  · gate: 38 memos — every notation the extractor
+uv run jim-eval                            # offline suites (~2s, no key/DB/network):
+                                           #  · gate: labeled memos — every notation the extractor
                                            #    knows, truthful (must pass) + planted (must reject)
                                            #  · guards: impersonal tone, hostile identifiers,
                                            #    completeness, materiality, NL propose/dispose
                                            #  · scenarios: the real engine with scripted seams —
-                                           #    retry loop, memo cache, fail-closed paths, and the
-                                           #    never-bill-rejected invariant checked at the ledger
+                                           #    retry loop, memo cache, fail-closed paths, gate AND
+                                           #    judge rejections, never-billed checked at the ledger
 uv run jim-eval run --suite all --label "sonnet-4-6"   # + live: held-out tickers, single-pass vs
                                            #    debate, rubric/latency/tokens/$ per run (needs key)
 uv run jim-eval list                       # run history (persisted to ./eval_runs, gitignored)
