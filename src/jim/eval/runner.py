@@ -288,6 +288,7 @@ async def run_suite_live(
 
 def _config_snapshot() -> dict:
     from jim.config import get_settings
+    from jim.llm import resolve_mode, subscription_available
 
     s = get_settings()
     return {
@@ -300,6 +301,10 @@ def _config_snapshot() -> dict:
         "research_max_attempts": s.research_max_attempts,
         "enable_debate": s.enable_debate,
         "has_anthropic_key": bool(s.anthropic_api_key),
+        # Auth mode is recorded so cost metrics stay comparable: under subscription
+        # there is no per-token charge, so inference_cost_usd is notional.
+        "llm_auth_mode": resolve_mode(),
+        "has_subscription": subscription_available(),
     }
 
 

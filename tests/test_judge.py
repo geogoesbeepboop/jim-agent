@@ -10,7 +10,9 @@ import json
 
 
 from jim.config import Settings
+from jim.llm import LLMResponse
 from jim.research import judge as judge_mod
+from jim.research.cost import Usage
 from jim.research.facts import USD, Fact, Snapshot
 from jim.research.judge import JudgeResult, _parse_claims, judge_faithfulness
 
@@ -22,37 +24,26 @@ def _snap() -> Snapshot:
     )
 
 
-class _FakeUsage:
-    input_tokens = 10
-    output_tokens = 20
+def _install_fake_llm(monkeypatch, capture: dict, payload: str, stop_reason: str = "end_turn"):
+    """Patch the judge's LLM seam: a client whose ``complete`` returns ``payload``.
 
+    Also forces the credential gate open, so tests don't depend on env creds.
+    """
 
-class _FakeBlock:
-    type = "text"
+    class _FakeClient:
+        mode = "api_key"
 
-    def __init__(self, text: str):
-        self.text = text
-
-
-class _FakeResp:
-    def __init__(self, text: str, stop_reason: str = "end_turn"):
-        self.content = [_FakeBlock(text)]
-        self.usage = _FakeUsage()
-        self.stop_reason = stop_reason
-
-
-def _fake_client(capture: dict, payload: str, stop_reason: str = "end_turn"):
-    class _Messages:
-        async def create(self, *, model, **kwargs):
+        async def complete(self, *, model, system, user, max_tokens):
             capture["model"] = model
-            capture["max_tokens"] = kwargs.get("max_tokens")
-            return _FakeResp(payload, stop_reason)
+            capture["max_tokens"] = max_tokens
+            return LLMResponse(
+                text=payload,
+                usage=Usage(model=model, input_tokens=10, output_tokens=20),
+                stop_reason=stop_reason,
+            )
 
-    class _Client:
-        def __init__(self, *a, **k):
-            self.messages = _Messages()
-
-    return _Client
+    monkeypatch.setattr(judge_mod, "live_llm_available", lambda *a, **k: True)
+    monkeypatch.setattr(judge_mod, "build_llm_client", lambda *a, **k: _FakeClient())
 
 
 def test_parse_claims_tolerant() -> None:
@@ -68,7 +59,7 @@ def test_parse_claims_tolerant() -> None:
 
 
 def test_skips_without_key(monkeypatch) -> None:
-    monkeypatch.setattr(judge_mod, "get_settings", lambda: Settings(anthropic_api_key=None))
+    monkeypatch.setattr(judge_mod, "live_llm_available", lambda *a, **k: False)
     import asyncio
 
     res = asyncio.run(judge_faithfulness("memo", _snap()))
@@ -88,7 +79,7 @@ async def test_parses_checklist_and_selects_model(monkeypatch) -> None:
         }
     )
     capture: dict = {}
-    monkeypatch.setattr(judge_mod, "AsyncAnthropic", _fake_client(capture, payload))
+    _install_fake_llm(monkeypatch, capture, payload)
     monkeypatch.setattr(
         judge_mod,
         "get_settings",
@@ -112,7 +103,7 @@ async def test_parses_checklist_and_selects_model(monkeypatch) -> None:
 
 async def test_unparseable_fails_closed(monkeypatch) -> None:
     capture: dict = {}
-    monkeypatch.setattr(judge_mod, "AsyncAnthropic", _fake_client(capture, "not json at all"))
+    _install_fake_llm(monkeypatch, capture, "not json at all")
     monkeypatch.setattr(
         judge_mod, "get_settings", lambda: Settings(anthropic_api_key="sk-test")
     )
@@ -132,9 +123,7 @@ async def test_truncated_output_fails_closed_and_salvages(monkeypatch) -> None:
         '{"claim": "Debt $30", "supported": tr'  # <- cut off here
     )
     capture: dict = {}
-    monkeypatch.setattr(
-        judge_mod, "AsyncAnthropic", _fake_client(capture, truncated, stop_reason="max_tokens")
-    )
+    _install_fake_llm(monkeypatch, capture, truncated, stop_reason="max_tokens")
     monkeypatch.setattr(
         judge_mod, "get_settings", lambda: Settings(anthropic_api_key="sk-test")
     )
@@ -147,7 +136,7 @@ async def test_truncated_output_fails_closed_and_salvages(monkeypatch) -> None:
 async def test_uses_configured_max_tokens(monkeypatch) -> None:
     payload = json.dumps({"score": 1.0, "supported": True, "claims": [], "issues": []})
     capture: dict = {}
-    monkeypatch.setattr(judge_mod, "AsyncAnthropic", _fake_client(capture, payload))
+    _install_fake_llm(monkeypatch, capture, payload)
     monkeypatch.setattr(
         judge_mod,
         "get_settings",

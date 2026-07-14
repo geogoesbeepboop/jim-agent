@@ -59,6 +59,16 @@ class Settings(BaseSettings):
     # Price of one fundamentals research call.
     research_price: str = "$0.25"
     anthropic_api_key: str | None = Field(default=None, description="Synthesizer/judge key")
+    # Dual-mode Claude auth (see jim.llm). "api_key" is the ToS-sanctioned path for
+    # paid, third-party-facing output and the production default. "subscription"
+    # routes through the Claude Agent SDK / `claude login` — for your OWN dev-loop
+    # (evals, local jim-research) only; the seller + monitor entrypoints pin api_key
+    # at startup so subscription can never back paid output. "auto" prefers
+    # subscription when a credential is detectable, else api_key.
+    llm_auth_mode: str = "api_key"
+    # From `claude setup-token`; the Agent SDK reads it itself — surfaced here for
+    # auto-mode detection and test hermeticity.
+    claude_code_oauth_token: str | None = Field(default=None, description="Claude Code OAuth token")
     research_model: str = "claude-sonnet-4-6"
     judge_model: str = "claude-haiku-4-5-20251001"
     research_max_attempts: int = 2  # synthesize retries on a gate failure

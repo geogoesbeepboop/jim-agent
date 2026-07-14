@@ -20,9 +20,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from anthropic import AsyncAnthropic
-
 from jim.config import get_settings
+from jim.llm import build_llm_client, live_llm_available
 from jim.research.cost import Usage
 from jim.research.facts import Snapshot
 
@@ -148,30 +147,25 @@ async def judge_faithfulness(
     memo: str, snapshot: Snapshot, *, high_stakes: bool = False
 ) -> JudgeResult:
     settings = get_settings()
-    if not settings.enable_judge or not settings.anthropic_api_key:
+    if not settings.enable_judge or not live_llm_available():
         return JudgeResult.skip()
 
     model = settings.judge_high_stakes_model if high_stakes else settings.judge_model
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+    client = build_llm_client()
     user = (
         "FACTS:\n" + snapshot.facts_block() + "\n\nMEMO:\n" + memo + "\n\nReturn the JSON verdict."
     )
-    resp = await client.messages.create(
+    resp = await client.complete(
         model=model,
+        system=_SYSTEM,
+        user=user,
         max_tokens=settings.judge_max_tokens,  # room for the full per-claim checklist
-        system=[{"type": "text", "text": _SYSTEM, "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": user}],
     )
-    usage = Usage(
-        model=model,
-        input_tokens=resp.usage.input_tokens,
-        output_tokens=resp.usage.output_tokens,
-    )
-    text = "".join(b.text for b in resp.content if b.type == "text").strip()
+    text, usage = resp.text, resp.usage
     # ``max_tokens`` means the JSON was guillotined mid-object: json.loads fails not
     # because the judge is confused but because we didn't give it room. Name that
     # failure honestly so it's debuggable, and salvage the claims it *did* emit.
-    truncated = getattr(resp, "stop_reason", None) == "max_tokens"
+    truncated = resp.stop_reason == "max_tokens"
     try:
         # Be tolerant of stray fencing.
         start, end = text.find("{"), text.rfind("}")

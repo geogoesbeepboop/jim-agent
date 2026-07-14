@@ -11,8 +11,9 @@ uv run jim-initdb                # create tables
 ```
 
 Testnet faucets (Base Sepolia):
-- ETH  → https://www.alchemy.com/faucets/base-sepolia
-- USDC → https://faucet.circle.com  (select Base Sepolia)
+
+- ETH → https://www.alchemy.com/faucets/base-sepolia
+- USDC → https://faucet.circle.com (select Base Sepolia)
 
 ---
 
@@ -121,7 +122,13 @@ uv run pytest                           # full offline hermetic suite
 uv run jim-eval --gate-only             # gate regression (no ANTHROPIC_API_KEY needed)
 uv run jim-eval                         # full eval + debate lift
 uv run jim-eval AAPL MSFT              # restrict to specific tickers
+uv run jim-eval run --suite live --auth-mode subscription   # run live evals on your
+                                        # Claude subscription (claude login), no API credits
 ```
+
+> Subscription auth needs `uv sync --extra subscription` + `claude login` (or a
+> `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`). Dev-loop only — the seller
+> and monitors always use API-key auth (ADR-0010).
 
 ---
 
@@ -139,16 +146,17 @@ uv run python scripts/precompute.py              # warm token cache (WETH/WBTC/U
 
 ## Key env vars
 
-| Variable | Default | Notes |
-|---|---|---|
-| `NETWORK` | `eip155:84532` | Testnet. Switch to `eip155:8453` for Base mainnet |
-| `EVM_ADDRESS` | — | Wallet that *receives* payments |
-| `EVM_PRIVATE_KEY` | — | Wallet that *sends* payments; generate with `jim-wallet new` |
-| `ANTHROPIC_API_KEY` | — | Required for synthesis + judge |
-| `DATABASE_URL` | (Postgres string) | Unset → in-memory (no persistence) |
-| `GRAPH_LIVE` | `false` | `true` = real mainnet USDC spend on The Graph |
-| `ENABLE_JUDGE` | `true` | Faithfulness judge per claim |
-| `ENABLE_DEBATE` | `true` | Bull/bear/judge adversarial review |
-| `MONITOR_AUTOSTART` | `false` | `true` = embed scheduler inside seller process |
-| `PER_QUERY_BUDGET_USD` | `0.10` | Hard ceiling per data query (also the x402 price cap) |
-| `MEMO_CACHE_ENABLED` | `true` | Reuse identical memos at $0 inference cost |
+| Variable               | Default           | Notes                                                                                    |
+| ---------------------- | ----------------- | ---------------------------------------------------------------------------------------- |
+| `NETWORK`              | `eip155:84532`    | Testnet. Switch to `eip155:8453` for Base mainnet                                        |
+| `EVM_ADDRESS`          | —                 | Wallet that _receives_ payments                                                          |
+| `EVM_PRIVATE_KEY`      | —                 | Wallet that _sends_ payments; generate with `jim-wallet new`                             |
+| `ANTHROPIC_API_KEY`    | —                 | Required for synthesis + judge (production auth)                                         |
+| `LLM_AUTH_MODE`        | `api_key`         | `subscription`/`auto` = dev-loop evals via `claude login`; seller/monitors pin `api_key` |
+| `DATABASE_URL`         | (Postgres string) | Unset → in-memory (no persistence)                                                       |
+| `GRAPH_LIVE`           | `false`           | `true` = real mainnet USDC spend on The Graph                                            |
+| `ENABLE_JUDGE`         | `true`            | Faithfulness judge per claim                                                             |
+| `ENABLE_DEBATE`        | `true`            | Bull/bear/judge adversarial review                                                       |
+| `MONITOR_AUTOSTART`    | `false`           | `true` = embed scheduler inside seller process                                           |
+| `PER_QUERY_BUDGET_USD` | `0.10`            | Hard ceiling per data query (also the x402 price cap)                                    |
+| `MEMO_CACHE_ENABLED`   | `true`            | Reuse identical memos at $0 inference cost                                               |

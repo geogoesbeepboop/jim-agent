@@ -25,6 +25,8 @@ Health gate: `.claude/gate.sh` (lint + fast tests, <120s) — runs automatically
 ## Architecture map (files that matter)
 
 - `src/jim/config.py` — env-driven settings; network defaults to Base Sepolia (`eip155:84532`)
+- `src/jim/llm.py` — dual-mode Claude client factory: `api_key` (production, raw SDK) vs
+  `subscription` (dev-loop, Claude Agent SDK / `claude login`); seller/monitors pin api_key (ADR-0010)
 - `src/jim/research/gate.py` — **the sourcing gate**: deterministic, no-LLM check that every
   figure in a memo matches a cited `Fact`; fuzz-hardened (`tests/test_gate_fuzz.py`)
 - `src/jim/research/engine.py` — LangGraph pipeline: gather → memo-cache → synthesize →
@@ -49,6 +51,9 @@ Health gate: `.claude/gate.sh` (lint + fast tests, <120s) — runs automatically
 - **Offline-first.** Every feature ships fully tested with no key/wallet/network/DB; the one
   live "exit run" per phase is the only unchecked box.
 - **Impersonal.** Research and monitor output stays general — never personalized advice.
+- **Paid output is API-key-authed.** The seller + monitors pin `api_key` auth at startup
+  (`jim.llm.pin_api_key_mode`); Claude-subscription auth is dev-loop only (evals, local
+  `jim-research`) and must never back third-party-facing output — Anthropic ToS (ADR-0010).
 
 ## DO NOT
 

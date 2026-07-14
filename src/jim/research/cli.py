@@ -119,7 +119,18 @@ def main() -> int:
         action="store_true",
         help="Bypass the memo cache (always re-synthesize)",
     )
+    parser.add_argument(
+        "--auth-mode",
+        choices=["api_key", "subscription", "auto"],
+        default=None,
+        help="LLM auth (default: LLM_AUTH_MODE / api_key). subscription uses your "
+        "`claude login` via the Claude Agent SDK — for your own local runs only.",
+    )
     args = parser.parse_args()
+
+    from jim.llm import set_auth_mode
+
+    set_auth_mode(args.auth_mode)
     return asyncio.run(
         _run(
             args.identifier,
