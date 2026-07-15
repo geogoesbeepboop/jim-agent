@@ -73,11 +73,14 @@ class Settings(BaseSettings):
     judge_model: str = "claude-haiku-4-5-20251001"
     research_max_attempts: int = 2  # synthesize retries on a gate failure
     enable_judge: bool = True
-    # Faithfulness score below this fails the run. 0.8 is the pre-calibration
-    # default: the operating value is chosen from the `jim-eval judge-calibrate`
-    # threshold sweep against the labeled corpus (docs/EVAL_LADDER.md, Phase E2)
-    # — when calibration lands, record the calibration run_id here beside it.
-    judge_threshold: float = 0.8
+    # Faithfulness score below this fails the run. Set from the `jim-eval
+    # judge-calibrate` threshold sweep (docs/EVAL_LADDER.md, Phase E2) —
+    # calibration run 20260715T003647Z-dea5b09 (subscription mode, 40 labeled
+    # cases × 3 repeats) chose 0.55: balanced accuracy 0.96, false-rejects 0/15.
+    # The 5% false-reject cap binds here — 0.70–0.75 scored ba 0.9667 with 100%
+    # lie recall but 6.7% false-rejects. Provisional until the operator signs
+    # off the corpus labels (EVAL_LADDER Phase E2, remaining item).
+    judge_threshold: float = 0.55
     # The judge emits a per-claim checklist as JSON; a real memo has 15-25 claims,
     # so the budget must clear the whole object or the JSON truncates mid-array and
     # fails to parse — which fail-closes every run. 900 was far too small (see ADR-0009).

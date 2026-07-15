@@ -1,9 +1,10 @@
 # EVAL_LADDER — the eval maturity roadmap (L0 → L3)
 
-**Status:** Phase E1 landed. Phase E2's harness landed (dataset + `jim-eval
-judge-calibrate` + floor gating, all hermetically tested); its one unchecked box
-is the credentialed calibration run — the phase's live exit run, in keeping with
-the repo's offline-first pattern. E3–E4 are contracts awaiting execution.
+**Status:** Phase E1 landed. Phase E2's harness landed AND its calibration exit
+run has been executed (subscription mode, run `20260715T003647Z-dea5b09`, floor
+met — results below); the one remaining E2 box is operator sign-off of the 40
+corpus labels, with the two borderline cases called out. E3–E4 are contracts
+awaiting execution.
 
 jim is approaching eval-first maturity: the cases become the spec, and the suite
 must support real decisions (ship/block, model/prompt changes, pricing), not just
@@ -125,7 +126,7 @@ another named case is a merge candidate.**
 ---
 
 ## Phase E2 — L0 for the judge: labeled calibration behind a credentialed command
-### (harness ✅ landed · calibration exit run ☐ pending)
+### (harness ✅ · calibration run ✅ · label sign-off ☐ — the last open box)
 
 **Outcome.** The faithfulness judge gets the same standing as every other
 grader: a planted-failure corpus proving it catches what it claims, a measured
@@ -160,25 +161,52 @@ synthesized). Judge-prompt rewrites unless calibration fails. A generic
    ≤ 5%** (`eval_judge_min_balanced_accuracy` / `eval_judge_max_false_reject`
    in `src/jim/config.py`).
 
-**Remaining (the phase's live exit run).**
-3. **Operator review of the 40 labels.** The corpus was drafted in the same
-   diff as the harness; the human label is the calibration standard, so the
-   operator must read the 40 memos + rationales and amend any they disagree
-   with *before* the first calibration run (≤1 h — the rationales make each
-   label a one-sentence review).
-4. Run `jim-eval judge-calibrate` with a real key; set `judge_threshold` from
-   the sweep with the calibration run_id recorded beside the value in
-   `src/jim/config.py`.
-5. Recalibration triggers thereafter: any change to the judge prompt
+**Calibration results — run `20260715T003647Z-dea5b09` (2026-07-15).**
+Executed via `--auth-mode subscription` (ADR-0010 dev-loop path; $0 marginal,
+notional API-price cost $0.80): 40 cases × 3 repeats = 120 calls to the pinned
+`claude-haiku-4-5-20251001`, 31 min wall (p50 13.3s/call), exit 0 — **floor
+met**. Full document in `eval_runs/` (machine-local; durable history is E3).
+
+| threshold | balanced acc | lie recall | false-reject | flip rate |
+|---|---|---|---|---|
+| 0.80 (old default) | 0.9333 | **1.0000** (25/25, every family 100%) | 0.1333 (2/15) | 0.05 |
+| 0.70–0.75 | **0.9667** | 1.0000 | 0.0667 (1/15) | 0.05–0.10 |
+| **0.55–0.60 (chosen)** | 0.9600 | 0.9200 (23/25) | **0.0000** | 0.10 |
+
+The 5% false-reject cap binds: 0.70–0.75 has the best raw accuracy but kills
+1-in-15 faithful memos (refused revenue under never-bill-rejected), so the
+floor-first rule chose **0.55**, now set in `src/jim/config.py` with this
+run_id — **provisional until label sign-off**. The four borderline cases the
+operator should read first:
+
+- `leverage_uncharacterized` (faithful, medians 0.4–0.7): the judge reads
+  "leverage at this level cuts both ways" as an uncited evaluative claim.
+  Either the label stands (judge is over-strict on hedges) or the memo phrasing
+  deserves a fix — this single case is what pushes 0.70–0.75 over the cap.
+- `guidance_reiterated_plain` (faithful, median 0.75): dinged for the
+  meta-statement "no inference beyond the stated range is drawn".
+- `attractive_entry_point` (editorialization, median 0.65): regex-proof advice
+  that the judge under-scores — at 0.55 it would SHIP. If sign-off deems this
+  unacceptable, the floor cap (or the label set) is the thing to change, and
+  0.70+ becomes the operating point.
+- `loss_fully_offset` (misleading_comparison, median 0.65, scores 0.6–0.93):
+  the least stable verdict in the corpus.
+
+**Remaining (the last E2 box).**
+3. **Operator sign-off of the 40 labels** (≤1 h; start with the four cases
+   above). If any label flips, re-run `jim-eval judge-calibrate` (~$1 or $0
+   under subscription) and re-derive the threshold; if the advice-leak at 0.55
+   is unacceptable, adjust `eval_judge_max_false_reject` and re-choose.
+4. Recalibration triggers thereafter: any change to the judge prompt
    (`_SYSTEM`), `judge_model`, or `judge_threshold`; plus a quarterly drift
    check.
 
 **Acceptance evidence.** Harness: hermetic tests cover dataset composition, the
 blind-spot property, the calibration math, the run-document shape, and both CLI
-exit paths (floor met → 0, floor not met → 1, no credential → 2). Exit run: a
-committed calibration summary (confusion matrix at the chosen threshold,
-per-family recall, flip rate, run cost); the config threshold traceable to a
-run_id.
+exit paths (floor met → 0, floor not met → 1, no credential → 2). Exit run: the
+calibration summary above (confusion at old/chosen thresholds, per-family
+recall, flip rate, cost, run_id); `judge_threshold` in config is traceable to
+run `20260715T003647Z-dea5b09`.
 
 **Recurring cost.** Judge call ≈ 2k tokens in + 1.2k out on Haiku ($1/$5 per
 MTok) ≈ $0.008/call → 40 cases × 3 repeats ≈ **$0.96/calibration run**;
