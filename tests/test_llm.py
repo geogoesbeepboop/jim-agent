@@ -93,9 +93,13 @@ def test_live_available_api_key(monkeypatch) -> None:
 def test_live_available_subscription(monkeypatch) -> None:
     monkeypatch.setattr(llm, "get_settings", lambda: Settings(llm_auth_mode="subscription"))
     monkeypatch.setattr(llm, "_agent_sdk_importable", lambda: True)
-    monkeypatch.setattr(llm, "subscription_available", lambda: True)
-    assert live_llm_available() is True
+    # Explicit subscription mode trusts the CLI to resolve its own auth — the
+    # best-effort credential probe is auto-mode's concern (see resolve_mode);
+    # a Keychain or harness-managed login is invisible to the probe but real.
     monkeypatch.setattr(llm, "subscription_available", lambda: False)
+    assert live_llm_available() is True
+    # Without the Agent SDK installed there is no subscription path at all.
+    monkeypatch.setattr(llm, "_agent_sdk_importable", lambda: False)
     assert live_llm_available() is False
 
 
