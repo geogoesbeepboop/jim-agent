@@ -133,6 +133,30 @@ async def test_truncated_output_fails_closed_and_salvages(monkeypatch) -> None:
     assert [c.claim for c in res.claims] == ["Revenue $100", "Cash $45"]  # salvaged
 
 
+async def test_score_at_threshold_passes_and_below_fails(monkeypatch) -> None:
+    """passed = score >= judge_threshold: the boundary is inclusive, and a hair
+    below must fail. This is the knob the judge-calibration phase tunes from
+    labeled data (docs/EVAL_LADDER.md, Phase E2)."""
+
+    def payload(score: float) -> str:
+        return json.dumps({"score": score, "supported": True, "claims": [], "issues": []})
+
+    monkeypatch.setattr(
+        judge_mod,
+        "get_settings",
+        lambda: Settings(anthropic_api_key="sk-test", judge_threshold=0.8),
+    )
+
+    capture: dict = {}
+    _install_fake_llm(monkeypatch, capture, payload(0.8))
+    at_threshold = await judge_faithfulness("memo", _snap())
+    assert at_threshold.passed is True and at_threshold.score == 0.8
+
+    _install_fake_llm(monkeypatch, capture, payload(0.79))
+    below = await judge_faithfulness("memo", _snap())
+    assert below.passed is False and below.score == 0.79
+
+
 async def test_uses_configured_max_tokens(monkeypatch) -> None:
     payload = json.dumps({"score": 1.0, "supported": True, "claims": [], "issues": []})
     capture: dict = {}

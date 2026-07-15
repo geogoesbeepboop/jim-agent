@@ -73,7 +73,14 @@ class Settings(BaseSettings):
     judge_model: str = "claude-haiku-4-5-20251001"
     research_max_attempts: int = 2  # synthesize retries on a gate failure
     enable_judge: bool = True
-    judge_threshold: float = 0.8  # faithfulness score below this fails the run
+    # Faithfulness score below this fails the run. Set from the `jim-eval
+    # judge-calibrate` threshold sweep (docs/EVAL_LADDER.md, Phase E2) —
+    # calibration run 20260715T003647Z-dea5b09 (subscription mode, 40 labeled
+    # cases × 3 repeats) chose 0.55: balanced accuracy 0.96, false-rejects 0/15.
+    # The 5% false-reject cap binds here — 0.70–0.75 scored ba 0.9667 with 100%
+    # lie recall but 6.7% false-rejects. Provisional until the operator signs
+    # off the corpus labels (EVAL_LADDER Phase E2, remaining item).
+    judge_threshold: float = 0.55
     # The judge emits a per-claim checklist as JSON; a real memo has 15-25 claims,
     # so the budget must clear the whole object or the JSON truncates mid-array and
     # fails to parse — which fail-closes every run. 900 was far too small (see ADR-0009).
@@ -237,6 +244,11 @@ class Settings(BaseSettings):
     eval_rubric_drop: float = 0.02  # mean rubric composite may drop this much
     eval_cost_increase_pct: float = 25.0  # mean $/run may rise this much (%)
     eval_latency_increase_pct: float = 50.0  # p95 latency may rise this much (%)
+    # Judge-calibration floor (docs/EVAL_LADDER.md Phase E2): `jim-eval
+    # judge-calibrate` exits nonzero unless some sweep threshold reaches both.
+    # A judge that can't meet the floor must not co-decide ok/rejected.
+    eval_judge_min_balanced_accuracy: float = 0.85  # vs the labeled judge corpus
+    eval_judge_max_false_reject: float = 0.05  # faithful memos wrongly failed
 
     # --- Phase 6: resilience (timeouts, retries, circuit breaker) -----------
     # Every free upstream fetch (EDGAR, Yahoo, macro) runs through

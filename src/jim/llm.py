@@ -116,7 +116,14 @@ def live_llm_available(mode: str | None = None) -> bool:
     """
     resolved = resolve_mode(mode)
     if resolved == "subscription":
-        return _agent_sdk_importable() and subscription_available()
+        # Explicit subscription mode trusts the operator: the claude CLI resolves
+        # its own auth (login session, macOS Keychain, harness-managed credentials
+        # in remote containers), much of which subscription_available()'s
+        # best-effort probe cannot see. Auto-mode already consulted the probe
+        # inside resolve_mode, so reaching "subscription" via auto implies it
+        # passed; and a truly unauthenticated explicit run fails loudly at the
+        # first SDK call instead of silently skipping the judge.
+        return _agent_sdk_importable()
     return bool(get_settings().anthropic_api_key)
 
 

@@ -4,6 +4,7 @@
     uv run jim-eval run --suite all          # + the live lift eval (needs a key)
     uv run jim-eval run --suite live AAPL KO # live suite on specific tickers
     uv run jim-eval run --compare-baseline   # fail (exit 1) on regression vs baseline
+    uv run jim-eval judge-calibrate          # judge vs labeled corpus (needs a key, ~$1)
     uv run jim-eval list                     # persisted runs
     uv run jim-eval show latest              # one run in detail
     uv run jim-eval compare baseline latest  # diff two runs
@@ -182,6 +183,93 @@ def _cmd_run(args) -> int:
     return exit_code
 
 
+def _print_judge_calibration(run: dict) -> None:
+    block = run["suites"].get("judge") or {}
+    cal = block.get("calibration") or {}
+    if not cal or not cal.get("cases"):
+        print("  no graded samples — every judge call was skipped or errored.")
+        return
+    at = cal.get("at_configured") or {}
+    print(
+        f"\n  calibration: {cal['cases']} cases ({cal['faithful']} faithful / "
+        f"{cal['unfaithful']} unfaithful) × {cal['repeats']} repeat(s)"
+    )
+    print(
+        f"  at configured threshold {at.get('threshold')}: "
+        f"balanced accuracy {_fmt(at.get('balanced_accuracy'))} · "
+        f"sensitivity {_fmt(at.get('sensitivity'))} · "
+        f"false-reject {_fmt(at.get('false_reject_rate'))} · "
+        f"flip rate {_fmt(at.get('flip_rate'))}"
+    )
+    fams = cal.get("per_family") or {}
+    if fams:
+        print("  per family:")
+        for name, fam in fams.items():
+            rate = fam.get("recall", fam.get("pass_rate"))
+            kind = "pass rate" if name == "faithful" else "recall"
+            print(f"    {name:<24}{fam['correct']}/{fam['cases']}  {kind} {_fmt(rate)}")
+    print("  threshold sweep:")
+    head = f"    {'t':>5}{'bal acc':>9}{'sens':>7}{'f-rej':>7}{'flips':>7}"
+    print(head)
+    for row in cal.get("sweep") or []:
+        print(
+            f"    {row['threshold']:>5}{_fmt(row.get('balanced_accuracy')):>9}"
+            f"{_fmt(row.get('sensitivity')):>7}{_fmt(row.get('false_reject_rate')):>7}"
+            f"{_fmt(row.get('flip_rate')):>7}"
+        )
+    chosen = cal.get("chosen") or {}
+    floor = cal.get("floor") or {}
+    if chosen:
+        verdict = "FLOOR MET" if chosen.get("floor_met") else "FLOOR NOT MET"
+        print(
+            f"\n  chosen threshold: {chosen.get('threshold')} "
+            f"(balanced accuracy {_fmt(chosen.get('balanced_accuracy'))}, "
+            f"false-reject {_fmt(chosen.get('false_reject_rate'))}) — {verdict} "
+            f"(floor: ba ≥ {floor.get('min_balanced_accuracy')}, "
+            f"f-rej ≤ {floor.get('max_false_reject_rate')})"
+        )
+        if chosen.get("floor_met"):
+            print(
+                "  next: set JUDGE_THRESHOLD to the chosen value and record this "
+                "run_id beside it in config.py (docs/EVAL_LADDER.md, Phase E2)."
+            )
+        else:
+            print(
+                "  per the E2 contract: a judge that can't meet the floor at any "
+                "threshold must not co-decide ok/rejected — demote to advisory "
+                "(docs/EVAL_LADDER.md, Phase E2 kill criteria)."
+            )
+
+
+def _cmd_judge_calibrate(args) -> int:
+    from jim.config import get_settings
+    from jim.eval import storage
+    from jim.eval.runner import run_suites
+    from jim.llm import live_llm_available, set_auth_mode
+
+    set_auth_mode(getattr(args, "auth_mode", None))
+    if not get_settings().enable_judge:
+        print("jim-eval: judge-calibrate needs ENABLE_JUDGE=true.", file=sys.stderr)
+        return 2
+    if not live_llm_available():
+        print(
+            "jim-eval: judge-calibrate runs the real judge model and needs an LLM "
+            "credential (ANTHROPIC_API_KEY, or --auth-mode subscription via "
+            "`claude login`). This is deliberate spend (~$1 per calibration) — see "
+            "docs/EVAL_LADDER.md, Phase E2.",
+            file=sys.stderr,
+        )
+        return 2
+
+    run = asyncio.run(run_suites(["judge"], repeats=args.repeats, label=args.label))
+    if not args.no_save:
+        storage.save_run(run)
+    _print_suite_table(run, saved=not args.no_save)
+    _print_judge_calibration(run)
+    chosen = (run["suites"].get("judge", {}).get("calibration") or {}).get("chosen") or {}
+    return 0 if chosen.get("floor_met") else 1
+
+
 def _cmd_list(args) -> int:
     from jim.eval import storage
 
@@ -301,6 +389,26 @@ def main() -> int:
         help="diff against the baseline run and exit 1 on regression",
     )
     p_run.set_defaults(fn=_cmd_run)
+
+    p_judge = sub.add_parser(
+        "judge-calibrate",
+        help="grade the pinned judge model against the labeled corpus (needs a key)",
+    )
+    p_judge.add_argument("--label", help="human label stored with the run")
+    p_judge.add_argument(
+        "--repeats",
+        type=int,
+        default=3,
+        help="judge calls per case, for verdict-stability measurement (default 3)",
+    )
+    p_judge.add_argument("--no-save", action="store_true", help="don't persist this run")
+    p_judge.add_argument(
+        "--auth-mode",
+        choices=["api_key", "subscription", "auto"],
+        default=None,
+        help="LLM auth (default: LLM_AUTH_MODE / api_key). subscription is dev-loop only.",
+    )
+    p_judge.set_defaults(fn=_cmd_judge_calibrate)
 
     p_list = sub.add_parser("list", help="list persisted runs")
     p_list.set_defaults(fn=_cmd_list)
