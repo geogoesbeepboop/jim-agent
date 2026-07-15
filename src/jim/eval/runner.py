@@ -12,6 +12,11 @@ Four suites, cheapest first:
                    debate, scored by the rubric (needs ANTHROPIC_API_KEY;
                    spends real tokens; records latency + cost per run).
 
+There is also a ``judge`` suite — the judge-calibration corpus (labeled memos
+through the real judge model, docs/EVAL_LADDER.md Phase E2). It is deliberate
+spend, reachable only via ``jim-eval judge-calibrate``, never via
+``--suite all``.
+
 ``run_suites`` returns one self-contained run document (see
 :mod:`jim.eval.storage` for persistence) whose ``summary`` block carries the
 headline metrics the trend charts plot.
@@ -283,6 +288,88 @@ async def run_suite_live(
     return cases, {"variants": per_variant, "lift": _live_lift(per_variant)}
 
 
+# --- judge calibration suite ------------------------------------------------------
+
+
+async def run_suite_judge(*, repeats: int = 3) -> tuple[list[CaseResult], dict]:
+    """Grade the labeled judge corpus with the real (pinned) judge model.
+
+    Returns ``(cases, extras)`` where each case's ``passed`` means "the judge's
+    verdict agrees with the human label at the configured threshold", and
+    ``extras['calibration']`` is the full deterministic report (confusion
+    matrix, per-family recall, flip rate, threshold sweep, chosen threshold,
+    floor verdict) from :mod:`jim.eval.calibrate`.
+    """
+    from jim.config import get_settings
+    from jim.eval.calibrate import JudgeSample, calibration_report
+    from jim.eval.dataset_judge import JUDGE_CASES, judge_snapshot
+    from jim.research.judge import judge_faithfulness
+
+    settings = get_settings()
+    total = len(JUDGE_CASES) * repeats
+    out: list[CaseResult] = []
+    samples: list[JudgeSample] = []
+    for case in JUDGE_CASES:
+        sample = JudgeSample(name=case.name, family=case.family, label_faithful=case.label_faithful)
+        for repeat in range(repeats):
+            name = case.name + (f"#r{repeat}" if repeat else "")
+            _progress(f"judge {len(out) + 1}/{total} {name} ...")
+            t0 = time.perf_counter()
+            try:
+                res = await judge_faithfulness(case.memo, judge_snapshot())
+                error = None
+            except Exception as e:
+                res, error = None, f"{type(e).__name__}: {e}"
+            latency = (time.perf_counter() - t0) * 1000
+            if res is None or res.skipped:
+                # A skipped verdict mid-calibration means the credential/judge
+                # went away — that sample is unusable, not silently faithful.
+                out.append(
+                    CaseResult(
+                        suite="judge",
+                        name=name,
+                        passed=False,
+                        latency_ms=latency,
+                        details={"family": case.family, "label_faithful": case.label_faithful},
+                        error=error or "judge skipped (no credential or judge disabled)",
+                    )
+                )
+                continue
+            sample.scores.append(res.score)
+            usage = res.usage
+            out.append(
+                CaseResult(
+                    suite="judge",
+                    name=name,
+                    passed=res.passed == case.label_faithful,
+                    score=res.score,
+                    latency_ms=latency,
+                    cost_usd=usage.cost_usd() if usage else 0.0,
+                    input_tokens=usage.input_tokens if usage else 0,
+                    output_tokens=usage.output_tokens if usage else 0,
+                    details={
+                        "family": case.family,
+                        "label_faithful": case.label_faithful,
+                        "repeat": repeat,
+                        "judge_passed": res.passed,
+                        "judge_score": res.score,
+                        "issues": res.issues,
+                        "rationale": case.rationale,
+                    },
+                )
+            )
+        if sample.scores:
+            samples.append(sample)
+
+    report = calibration_report(
+        samples,
+        configured_threshold=settings.judge_threshold,
+        min_balanced_accuracy=settings.eval_judge_min_balanced_accuracy,
+        max_false_reject=settings.eval_judge_max_false_reject,
+    )
+    return out, {"calibration": report}
+
+
 # --- orchestration ----------------------------------------------------------------
 
 
@@ -323,6 +410,24 @@ def _summarize(suites: dict[str, dict], extras: dict) -> dict:
         "offline_pass_rate": round(offline_passed / offline_cases, 4) if offline_cases else None,
         "all_offline_passed": offline_cases > 0 and offline_passed == offline_cases,
     }
+    judge = suites.get("judge", {}).get("aggregate")
+    if judge:
+        total_cost += judge["total_cost_usd"]
+        cal = extras.get("judge_calibration") or {}
+        chosen = cal.get("chosen") or {}
+        summary.update(
+            {
+                "judge_cases": judge["cases"],
+                # pass_rate here = agreement with the human labels at the
+                # configured threshold (see run_suite_judge).
+                "judge_agreement_rate": judge["pass_rate"],
+                "judge_balanced_accuracy": (cal.get("at_configured") or {}).get(
+                    "balanced_accuracy"
+                ),
+                "judge_chosen_threshold": chosen.get("threshold"),
+                "judge_floor_met": chosen.get("floor_met"),
+            }
+        )
     live = suites.get("live", {}).get("aggregate")
     if live:
         total_cost += live["total_cost_usd"]
@@ -376,6 +481,12 @@ async def run_suites(
             block["lift"] = live_extras["lift"]
             suites["live"] = block
             extras["live_lift"] = live_extras["lift"]
+        elif name == "judge":
+            cases, judge_extras = await run_suite_judge(repeats=repeats)
+            block = suite_block(cases)
+            block["calibration"] = judge_extras["calibration"]
+            suites["judge"] = block
+            extras["judge_calibration"] = judge_extras["calibration"]
         else:
             raise ValueError(f"unknown suite: {name!r} (choose from {ALL_SUITES})")
         _progress(f"suite {name} done in {time.perf_counter() - suite_t0:.1f}s")

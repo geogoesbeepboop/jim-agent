@@ -434,6 +434,8 @@ uv run jim-eval                            # offline suites (~2s, no key/DB/netw
                                            #    judge rejections, never-billed checked at the ledger
 uv run jim-eval run --suite all --label "sonnet-4-6"   # + live: held-out tickers, single-pass vs
                                            #    debate, rubric/latency/tokens/$ per run (needs key)
+uv run jim-eval judge-calibrate            # judge vs 40 labeled memos: confusion matrix,
+                                           #    threshold sweep, floor gate (needs key, ~$1)
 uv run jim-eval list                       # run history (persisted to ./eval_runs, gitignored)
 uv run jim-eval baseline set latest        # promote a known-good run
 uv run jim-eval run --compare-baseline     # exit 1 on regression vs the baseline:

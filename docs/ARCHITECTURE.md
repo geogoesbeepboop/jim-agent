@@ -466,6 +466,15 @@ subscription` via `claude login`): held-out tickers through the real
   ADR-0006 rubric and measured for latency, tokens, and $ cost; `--repeats N`
   for variance. Aggregates also log to Langfuse when configured.
 
+There is also a **judge-calibration suite** (`jim-eval judge-calibrate`, needs
+a credential, deliberately NOT part of `--suite all`): 40 operator-labeled
+memos — every one gate-clean and impersonal-guard-clean, so they measure only
+the judge's unique signal — run through the pinned judge model × repeats, with
+a deterministic report (confusion matrix, per-family recall, verdict flip-rate,
+threshold sweep) and a hard floor: exit nonzero unless balanced accuracy ≥ 0.85
+with false-rejects ≤ 5%. This is how `JUDGE_THRESHOLD` is chosen from data
+(see [EVAL_LADDER.md](EVAL_LADDER.md), Phase E2).
+
 Every case reduces to one uniform row (passed, 0–1 score, latency, tokens, $),
 and every `jim-eval run` persists one JSON document (git sha + config snapshot +
 all rows) under `EVAL_RUNS_DIR` (default `./eval_runs`). `jim-eval baseline set`

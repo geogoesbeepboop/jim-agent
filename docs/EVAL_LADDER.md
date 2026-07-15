@@ -1,6 +1,9 @@
 # EVAL_LADDER — the eval maturity roadmap (L0 → L3)
 
-**Status:** Phase E1 landed (this document's diff). E2–E4 are contracts awaiting execution.
+**Status:** Phase E1 landed. Phase E2's harness landed (dataset + `jim-eval
+judge-calibrate` + floor gating, all hermetically tested); its one unchecked box
+is the credentialed calibration run — the phase's live exit run, in keeping with
+the repo's offline-first pattern. E3–E4 are contracts awaiting execution.
 
 jim is approaching eval-first maturity: the cases become the spec, and the suite
 must support real decisions (ship/block, model/prompt changes, pricing), not just
@@ -122,6 +125,7 @@ another named case is a merge candidate.**
 ---
 
 ## Phase E2 — L0 for the judge: labeled calibration behind a credentialed command
+### (harness ✅ landed · calibration exit run ☐ pending)
 
 **Outcome.** The faithfulness judge gets the same standing as every other
 grader: a planted-failure corpus proving it catches what it claims, a measured
@@ -131,30 +135,50 @@ error rate, and a `judge_threshold` chosen from data instead of vibes.
 synthesized). Judge-prompt rewrites unless calibration fails. A generic
 "LLM judge framework."
 
-**Work items.**
-1. `src/jim/eval/dataset_judge.py` — ~40 operator-labeled `JudgeCase`s
-   (memo + facts + `label_faithful` + failure-family tag): ~15 faithful
-   (including hedged-but-grounded qualitative claims, to measure false rejects)
-   and ~25 unfaithful spanning the families the judge exists for and the gate
-   *cannot* see — unsupported qualitative claim, editorialization/advice,
-   misleading-but-numerically-true comparison, causal overreach, wrong-citation
-   attribution (leans C1, cites C2). Human labels are the calibration standard;
-   each unfaithful case carries a one-sentence rationale.
-2. `jim-eval judge-calibrate` (new subcommand + `run_suite_judge`): **requires a
-   key — never in default pytest** (AGENTS.md hermeticity invariant). Runs the
-   pinned `judge_model` on each case × `--repeats 3`; reports confusion matrix,
-   per-family recall, verdict flip-rate across repeats, and a threshold sweep
-   0.5–0.95; persists as a normal run document (`suite="judge"`) so `compare`
-   and the UI work unchanged. Exits nonzero below the floor: **balanced
-   accuracy ≥ 0.85 and false-reject rate ≤ 5% at the chosen threshold.**
-3. Set `judge_threshold` in `src/jim/config.py` from the sweep, with the
-   calibration run_id recorded beside the value.
-4. Recalibration triggers: any change to the judge prompt (`_SYSTEM`),
-   `judge_model`, or `judge_threshold`; plus a quarterly drift check.
+**What landed.**
+1. `src/jim/eval/dataset_judge.py` — **40 operator-labeled cases** over a shared
+   fact book: 15 faithful (including hedged-but-grounded phrasings — the set
+   that measures false rejects) and 25 unfaithful across the five families the
+   gate *cannot* see: `unsupported_claim` (6), `editorialization` (5, phrased
+   to slip the impersonal regexes), `misleading_comparison` (5, correctly-cited
+   figures in a false relation — e.g. "buybacks of $5.0B dwarf capex of $11B"),
+   `causal_overreach` (5), `wrong_citation` (4). Every case carries a
+   one-sentence label rationale — the human label IS the calibration standard.
+   **Design property, enforced by test:** every memo passes the sourcing gate
+   AND the deterministic impersonal guard, so the corpus lives strictly in the
+   deterministic blind spot — whatever the judge scores here is signal only the
+   judge can provide (`tests/test_judge_calibration.py::
+   test_every_case_is_in_the_deterministic_blind_spot`).
+2. `jim-eval judge-calibrate` — **requires a key, never in default pytest**
+   (AGENTS.md hermeticity invariant; exits 2 with a cost warning when no
+   credential). Runs the pinned `judge_model` on each case × `--repeats 3`;
+   reports confusion matrix, per-family recall, verdict flip-rate across
+   repeats, and a threshold sweep 0.5–0.95 (`src/jim/eval/calibrate.py` — pure
+   deterministic math, fully unit-tested); persists as a normal run document
+   (`suite="judge"`) so storage, `list/show`, and the UI work unchanged. Exits
+   nonzero below the floor: **balanced accuracy ≥ 0.85 and false-reject rate
+   ≤ 5%** (`eval_judge_min_balanced_accuracy` / `eval_judge_max_false_reject`
+   in `src/jim/config.py`).
 
-**Acceptance evidence.** A committed calibration summary (confusion matrix at
-the chosen threshold, per-family recall, flip rate, run cost); the config
-threshold traceable to a run_id.
+**Remaining (the phase's live exit run).**
+3. **Operator review of the 40 labels.** The corpus was drafted in the same
+   diff as the harness; the human label is the calibration standard, so the
+   operator must read the 40 memos + rationales and amend any they disagree
+   with *before* the first calibration run (≤1 h — the rationales make each
+   label a one-sentence review).
+4. Run `jim-eval judge-calibrate` with a real key; set `judge_threshold` from
+   the sweep with the calibration run_id recorded beside the value in
+   `src/jim/config.py`.
+5. Recalibration triggers thereafter: any change to the judge prompt
+   (`_SYSTEM`), `judge_model`, or `judge_threshold`; plus a quarterly drift
+   check.
+
+**Acceptance evidence.** Harness: hermetic tests cover dataset composition, the
+blind-spot property, the calibration math, the run-document shape, and both CLI
+exit paths (floor met → 0, floor not met → 1, no credential → 2). Exit run: a
+committed calibration summary (confusion matrix at the chosen threshold,
+per-family recall, flip rate, run cost); the config threshold traceable to a
+run_id.
 
 **Recurring cost.** Judge call ≈ 2k tokens in + 1.2k out on Haiku ($1/$5 per
 MTok) ≈ $0.008/call → 40 cases × 3 repeats ≈ **$0.96/calibration run**;
@@ -302,7 +326,7 @@ min/week of human review** — stated here so it's budgeted, not discovered.
 | Phase | Recurring token/$ | Human | Basis |
 |---|---|---|---|
 | E1 | $0 | one-time, landed | offline only |
-| E2 | ~$1/calibration; $4–8/yr | one-time 2–3 h labeling | 40 cases × 3 reps × $0.008 (Haiku, ~2k in / 1.2k out) |
+| E2 | ~$1/calibration; $4–8/yr | ≤1 h label review (corpus drafted; labels await operator sign-off) | 40 cases × 3 reps × $0.008 (Haiku, ~2k in / 1.2k out) |
 | E3 | ~$3/run; $12–15/mo weekly | 15 min/wk | 48 cases: 24 × $0.035 + 24 × $0.075 (Sonnet $3/$15) |
 | E4 | ~$0.70/mo + ~10 MB/yr | 30–45 min/wk | 20 samples/wk × $0.008 judge; deterministic re-grades free |
 | **Steady state** | **≈ $15/month worst case** at API pricing ($0 marginal under subscription auth for dev-loop runs — ADR-0010) | ~1 h/wk | |
