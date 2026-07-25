@@ -1,8 +1,11 @@
-"""Engine graph + economics, proven offline by mocking source + LLM.
+"""Engine rejection paths, proven offline by mocking source + LLM.
 
-The gate is real and deterministic, so we feed scripted memos and assert the
-graph retries on a gate failure, gives up after max attempts, surfaces gather
-errors, and records correct per-query margin.
+This file pins the two ways a synthesized memo dies: the deterministic gate
+exhausts its retries, and the faithfulness judge fails a gate-clean memo —
+each rejected and never billed. The happy paths (first-try ship, gate-feedback
+retry, gather-error fail-closed, margin accounting) are pinned once, as eval
+scenarios in ``src/jim/eval/scenarios.py``, executed on every commit by
+``tests/test_eval_harness.py`` — one copy of each case, not two.
 """
 
 from __future__ import annotations
@@ -16,7 +19,7 @@ from jim.research.facts import USD, Fact, Snapshot
 from jim.research.judge import JudgeResult
 from jim.research.products import Product
 from jim.research.synthesize import SynthResult
-from jim.sources.base import GatherResult, ProcurementError
+from jim.sources.base import GatherResult
 from jim.store import get_store, reset_store
 
 
@@ -92,19 +95,6 @@ def _script(memos: list[str]):
     return fake_synth, calls
 
 
-async def test_retries_then_passes(monkeypatch):
-    _use_source(monkeypatch, FakeSource())
-    synth, calls = _script(["Revenue was $999 [C1].", "Revenue was $100 [C1]."])
-    monkeypatch.setattr(engine, "synthesize", synth)
-
-    result = await engine.run_research("ACME")
-
-    assert result.status == "ok"
-    assert result.attempts == 2
-    assert calls["n"] == 2
-    assert result.gate.passed
-
-
 async def test_rejects_after_exhausting_attempts(monkeypatch):
     _use_source(monkeypatch, FakeSource())
     synth, _ = _script(["Revenue was $999 [C1]."])  # always wrong
@@ -117,33 +107,35 @@ async def test_rejects_after_exhausting_attempts(monkeypatch):
     assert result.attempts == 2
 
 
-async def test_gather_error_surfaces(monkeypatch):
-    _use_source(monkeypatch, FakeSource(raise_exc=ProcurementError("upstream down")))
-    synth, _ = _script(["unused"])
+async def test_failing_judge_rejects_run_and_never_bills(monkeypatch):
+    """status = ok only if gate.passed AND judge.passed. A memo the gate clears
+    but the judge fails must be rejected on the judge's verdict alone, with no
+    retry, and must book $0 — never-bill-rejected (ADR-0008) is not a
+    gate-only privilege."""
+    _use_source(monkeypatch, FakeSource())
+    synth, calls = _script(["Revenue was $100 [C1]."])  # numerically clean
     monkeypatch.setattr(engine, "synthesize", synth)
+
+    async def failing_judge(memo, snapshot, **_) -> JudgeResult:
+        return JudgeResult(
+            skipped=False,
+            passed=False,
+            score=0.2,
+            issues=["unsupported: scripted unfaithful claim"],
+        )
+
+    monkeypatch.setattr(engine, "judge_faithfulness", failing_judge)
 
     result = await engine.run_research("ACME")
 
-    assert result.status == "error"
-    assert "upstream down" in (result.error or "")
-    assert result.memo is None
-
-
-async def test_margin_is_recorded(monkeypatch):
-    # Paid source costing $0.03; price_out $0.25; test model has no cost → margin 0.22.
-    _use_source(monkeypatch, FakeSource(cost_usd=0.03), price_out=0.25)
-    synth, _ = _script(["Revenue was $100 [C1]."])
-    monkeypatch.setattr(engine, "synthesize", synth)
-
-    result = await engine.run_research("ACME")
-
-    assert result.status == "ok"
-    assert result.cost["data_cost_usd"] == 0.03
-    assert result.cost["price_out_usd"] == 0.25
-    assert result.cost["margin_usd"] == pytest.approx(0.22)
+    assert result.status == "rejected"
+    assert result.gate is not None and result.gate.passed
+    assert result.judge is not None and not result.judge.passed
+    assert result.attempts == 1 and calls["n"] == 1  # judge failure never retries
+    assert result.cost["price_out_usd"] == 0.0
+    assert result.cost["margin_usd"] <= 0.0
 
     summary = await get_store().margin_summary()
-    assert summary["billable_queries"] == 1
-    assert summary["revenue_usd"] == pytest.approx(0.25)
-    assert summary["data_cost_usd"] == pytest.approx(0.03)
-    assert summary["total_margin_usd"] == pytest.approx(0.22)
+    assert summary["billable_queries"] == 0
+    assert summary["revenue_usd"] == 0.0
+    assert summary["total_queries"] == 1

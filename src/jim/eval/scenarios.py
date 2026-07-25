@@ -13,12 +13,15 @@ Each scenario pins one behavioral promise:
   - the gate's feedback loop actually repairs a hallucinating synthesis pass;
   - a persistently-hallucinating run is REJECTED and books $0 revenue — the
     never-bill-rejected invariant (ADR-0008), asserted at the ledger;
+  - a failing faithfulness-judge verdict alone rejects a gate-clean run and
+    books $0 — the ok/rejected decision is the conjunction (gate AND judge);
   - the memo cache short-circuits inference on identical data;
   - hostile identifiers are refused before any side effect;
   - upstream failures fail closed, never shipping an unverified memo;
   - a prompt injection in upstream data (hostile filing, peer memo) cannot move
     the gate or billing outcome — instruction-like content is inert;
-  - economics (price − data − inference = margin) land in the store correctly.
+  - economics (price − data − inference = margin) land in the store correctly,
+    asserted at the ledger for billable runs too.
 """
 
 from __future__ import annotations
@@ -26,7 +29,7 @@ from __future__ import annotations
 import inspect
 import math
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from jim.config import get_settings
 from jim.research.cost import Usage
@@ -34,6 +37,9 @@ from jim.research.facts import USD, Fact, Snapshot
 from jim.sources import BudgetExceeded
 from jim.sources.base import ProcurementError
 from jim.store.repo import MemoryStore
+
+if TYPE_CHECKING:
+    from jim.research.judge import JudgeResult
 
 # A validator inspects (results, store, extras) and returns (passed, details).
 # It may be async (e.g. to read the store's ledger).
@@ -126,6 +132,9 @@ class Scenario:
     source_error_factory: Callable[[], Exception] | None = None
     price_out_usd: float = 0.25
     snapshot_factory: Callable[[], Snapshot] = _snapshot
+    # Scripted judge verdict; None keeps the default seam (judge skipped), the
+    # same posture as an offline run with no key.
+    judge_result_factory: Callable[[], JudgeResult] | None = None
 
 
 async def run_scenario(scenario: Scenario) -> tuple[bool, dict]:
@@ -153,7 +162,9 @@ async def run_scenario(scenario: Scenario) -> tuple[bool, dict]:
             memo=memo, usage=Usage(model="scripted", input_tokens=250, output_tokens=180)
         )
 
-    async def skip_judge(memo, snapshot, **_):
+    async def scripted_judge(memo, snapshot, **_):
+        if scenario.judge_result_factory is not None:
+            return scenario.judge_result_factory()
         return JudgeResult.skip()
 
     async def no_debate(snapshot):
@@ -176,7 +187,7 @@ async def run_scenario(scenario: Scenario) -> tuple[bool, dict]:
     with (
         mock.patch.object(engine, "get_product", scripted_product),
         mock.patch.object(engine, "synthesize", scripted_synth),
-        mock.patch.object(engine, "judge_faithfulness", skip_judge),
+        mock.patch.object(engine, "judge_faithfulness", scripted_judge),
         mock.patch.object(engine, "run_debate", no_debate),
         mock.patch.object(engine, "get_store", lambda: store),
     ):
@@ -237,16 +248,39 @@ async def _v_rejected_never_billed(results, store, extras):
     }
 
 
-def _v_gather_error(results, store, extras):
+def _v_source_error_fails_closed(results, store, extras):
+    """Any source-side failure surfaces as status=error with no memo — the same
+    fail-closed contract regardless of which exception class the source raised."""
     r = results[0]
-    ok = r.status == "error" and "upstream down" in (r.error or "") and r.memo is None
+    ok = r.status == "error" and bool(r.error) and r.memo is None
     return ok, {"status": r.status, "error": r.error}
 
 
-def _v_budget_exceeded(results, store, extras):
+async def _v_judge_fail_rejected_never_billed(results, store, extras):
+    """The gate passed; the judge alone said no. The run must be rejected on that
+    verdict (no retry — judge feedback doesn't re-enter the loop) and must book
+    $0, so never-bill-rejected (ADR-0008) holds for judge rejections too."""
     r = results[0]
-    ok = r.status == "error" and r.memo is None
-    return ok, {"status": r.status, "error": r.error}
+    summary = await store.margin_summary()
+    ok = (
+        r.status == "rejected"
+        and bool(r.gate and r.gate.passed)
+        and bool(r.judge and not r.judge.skipped and not r.judge.passed)
+        and r.attempts == 1
+        and r.cost["price_out_usd"] == 0.0
+        and r.cost["margin_usd"] <= 0.0
+        and summary["billable_queries"] == 0
+        and summary["revenue_usd"] == 0.0
+        and summary["total_queries"] == 1
+    )
+    return ok, {
+        "status": r.status,
+        "gate_passed": bool(r.gate and r.gate.passed),
+        "judge_passed": bool(r.judge and r.judge.passed),
+        "attempts": r.attempts,
+        "cost": r.cost,
+        "ledger": {k: summary[k] for k in ("total_queries", "billable_queries", "revenue_usd")},
+    }
 
 
 def _v_memo_cache(results, store, extras):
@@ -273,15 +307,27 @@ def _v_hostile_identifier(results, store, extras):
     return ok, {"status": r.status, "error": r.error, "recorded_queries": len(store.queries)}
 
 
-def _v_margin_accounting(results, store, extras):
+async def _v_margin_accounting(results, store, extras):
     r = results[0]
+    summary = await store.margin_summary()
     ok = (
         r.status == "ok"
         and math.isclose(r.cost["data_cost_usd"], 0.03, abs_tol=1e-9)
         and math.isclose(r.cost["price_out_usd"], 0.25, abs_tol=1e-9)
         and math.isclose(r.cost["margin_usd"], 0.22, abs_tol=1e-6)
+        # ...and the same numbers land in the durable ledger, billable side.
+        and summary["billable_queries"] == 1
+        and math.isclose(summary["revenue_usd"], 0.25, abs_tol=1e-9)
+        and math.isclose(summary["data_cost_usd"], 0.03, abs_tol=1e-9)
+        and math.isclose(summary["total_margin_usd"], 0.22, abs_tol=1e-6)
     )
-    return ok, {"cost": r.cost}
+    return ok, {
+        "cost": r.cost,
+        "ledger": {
+            k: summary[k]
+            for k in ("billable_queries", "revenue_usd", "data_cost_usd", "total_margin_usd")
+        },
+    }
 
 
 def _v_advice_tone_dings_rubric(results, store, extras):
@@ -293,6 +339,29 @@ def _v_advice_tone_dings_rubric(results, store, extras):
     rubric = score_memo(r.memo, r.snapshot, gate=r.gate, completeness=r.completeness)
     ok = rubric.dimensions.get("impersonal") == 0.0 and rubric.composite < 0.9
     return ok, {"rubric": rubric.to_dict(), "status": r.status}
+
+
+def _fail_closed_scenario(name: str, description: str, error_factory) -> Scenario:
+    """One fail-closed contract, two named cases: the engine path is identical
+    (source raises → status=error, nothing ships) whatever the exception class."""
+    return Scenario(
+        name=name,
+        description=description,
+        memos=["unused"],
+        source_error_factory=error_factory,
+        validate=_v_source_error_fails_closed,
+    )
+
+
+def _failing_judge() -> "JudgeResult":
+    from jim.research.judge import JudgeResult
+
+    return JudgeResult(
+        skipped=False,
+        passed=False,
+        score=0.2,
+        issues=["unsupported: scripted unfaithful claim"],
+    )
 
 
 SCENARIOS: list[Scenario] = [
@@ -320,19 +389,15 @@ SCENARIOS: list[Scenario] = [
         memos=["Revenue was $999 [C1]."],
         validate=_v_rejected_never_billed,
     ),
-    Scenario(
-        name="gather_error_fails_closed",
-        description="An upstream failure surfaces as status=error; nothing unverified ships.",
-        memos=["unused"],
-        source_error_factory=lambda: ProcurementError("upstream down"),
-        validate=_v_gather_error,
+    _fail_closed_scenario(
+        "gather_error_fails_closed",
+        "An upstream failure surfaces as status=error; nothing unverified ships.",
+        lambda: ProcurementError("upstream down"),
     ),
-    Scenario(
-        name="budget_exceeded_fails_closed",
-        description="The per-query budget cap denying a purchase kills the run, not the wallet.",
-        memos=["unused"],
-        source_error_factory=lambda: BudgetExceeded("cap reached"),
-        validate=_v_budget_exceeded,
+    _fail_closed_scenario(
+        "budget_exceeded_fails_closed",
+        "The per-query budget cap denying a purchase kills the run, not the wallet.",
+        lambda: BudgetExceeded("cap reached"),
     ),
     Scenario(
         name="memo_cache_short_circuits_inference",
@@ -383,5 +448,17 @@ SCENARIOS: list[Scenario] = [
         ),
         memos=["Revenue was $100 [C1]. Investors should buy before earnings."],
         validate=_v_advice_tone_dings_rubric,
+    ),
+    Scenario(
+        name="judge_fail_rejects_and_never_bills",
+        description=(
+            "A numerically-clean memo passes the gate but the faithfulness judge "
+            "fails it; the run is REJECTED on the judge's verdict alone and books "
+            "$0 — the ok/rejected decision is the conjunction (gate AND judge), "
+            "and never-bill-rejected covers judge rejections too."
+        ),
+        memos=["Revenue was $100 [C1]."],
+        judge_result_factory=_failing_judge,
+        validate=_v_judge_fail_rejected_never_billed,
     ),
 ]
