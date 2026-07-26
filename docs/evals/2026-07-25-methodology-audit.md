@@ -153,3 +153,44 @@ From the Step 8 activation run, take ~20 real Sonnet memos, human-label them, an
 - **The negative controls in the adversarial block.** `injection_prose_without_figures_passes` and `true_figure_after_injection_still_passes` pin the *boundary* of the gate's job. Most injection suites only assert blocks and quietly encourage over-blocking; this one doesn't.
 - **`.claude/gate.sh` anti-cheat** and the credential-neutralized `.claude/evals.sh` — including the `--no-sync` and uv-lock-avoidance details, which read like scar tissue from real incidents.
 - **`docs/EVAL_LADDER.md` itself.** Per-phase recurring cost, explicit kill criteria including "a 0.30-weight grader that never changes a decision gets deleted", and recorded judgment calls awaiting sign-off. It is unusually honest about what hasn't been done — including several gaps in this audit, which it named first. The failure is execution lag against its own contract, not the contract.
+
+---
+
+## Addendum — contract v2 (2026-07-25, same day): what changes in this plan
+
+The house contract absorbed Anthropic's demystifying-evals, harness-design, and
+infrastructure-noise posts after this audit was written. The verdicts stand; amendments:
+
+1. **Step 6 reframed by tiering (D4 v2).** The 98 never-failed cases are **regression guards**,
+   not dead sensors — under v2 they are retired only on true duplication, and the mutation
+   ledger this audit prescribed is exactly how a guard proves it still bites. Keep Step 6, but
+   its output is "each guard maps to the mutation it catches," not a pruning quota. Add a
+   `tier` field alongside Step 5's `slice` field: everything current is `regression`; the
+   never-run live suite and future aspirational cases are `capability` — allowed to fail,
+   trend-line only, exempt from the exit code (which also softens the Step 1 defect's blast
+   radius: `--suite live` failures should never have been gating the same way).
+2. **Step 8 (L2 activation) gains three v2 clauses.** (a) *Scheduled, and absence-visible*: the
+   activation isn't done until the live run has a recurring schedule with a bounded budget and
+   the digest shows when it last ran — an unrun eval must be as loud as a failed one. (b)
+   *Trial isolation*: the 3 repeats must not share memo cache, store state, or conversation
+   context, or pass^k is invalid (the scenarios' fresh-`MemoryStore` discipline is the pattern;
+   `_run_live_case` must match it). (c) *Infra errors are their own category*: provider
+   timeouts/429s counted and reported separately, never as case failures; an error-heavy run is
+   void.
+3. **Step 4 (judge) gains the leniency clause (D3 v2).** The 25 unfaithful cases are the
+   known-bad set — report the judge's false-pass rate on them as the headline calibration
+   number, add few-shot scored anchors to `_SYSTEM`, and give the judge an explicit "Unknown"
+   escape excluded from the mean (pairs with the D3 finding that errors currently score 0.0…
+   which in this repo's judge would be a false *reject* — same class of bug).
+4. **Reference solutions (D4 v2):** the gate/guard corpora already embed expected outcomes;
+   the new requirement is executable proof — each case's known-good memo run through the
+   grader once, so "0% across all runs" is treated as a broken case with its repair in its own
+   reviewed diff (this is the carve-out the audit's "never weaken the instrument" rule lacked).
+5. **Step 7's safety expansion gains matched negatives (D6 v2).** For each new refusal case, a
+   near-miss that must proceed: a legitimate price at the cap boundary, a deep-but-legal call
+   chain, a monitor request mentioning an email address that is the user's own configured
+   contact. The existing negative controls in the injection block are the house pattern —
+   extend it, don't just add refusals.
+6. **Step 2's exported history gains environment fields (D2/D4 v2):** host, runner version,
+   and (for live runs) concurrency/resource notes join the config snapshot, so a future infra
+   change can't masquerade as a model regression.
